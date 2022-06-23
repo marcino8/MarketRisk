@@ -1,0 +1,712 @@
+---
+title: "Analiza wpływu korelacji na ryzyko inwestowania, na przykładzie portfela złożonego z indeksów NASDAQ100 RUSSELL2000 oraz NYSE Composite na podstawie dziennych danych historycznych z okresu 01/01/2006 - 31/12/2021"
+author: "Marcin Klimczak"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning =  FALSE)
+knitr::opts_chunk$set(fig.align = "center")
+```
+
+```{r, echo=FALSE, message=FALSE}
+rm(list=ls())
+library(ggplot2)
+library(dplyr)
+library(ExtDist)
+library(reshape2)
+library(ggpubr)
+library(ggcorrplot)
+library(ggridges)
+library(lubridate)
+library(multipanelfigure)
+library(cowplot)
+library(spatstat)
+library(MTS)
+library(GAS)
+library(ggcorrplot)
+library(gridExtra)
+ndx<-read.csv("NASDAQ100.csv")
+rut<-read.csv("RUSSELL2000.csv")
+nya<-read.csv("Nyse Composite Index.csv")
+```
+
+# Wstęp
+
+## Cel badania
+
+Niniejszy projekt ma na celu sprawdzenie, jak korelacja między stopami zwrotu indeksów giełdowych wpływa na wyznaczanie VaR.
+
+Oprócz tego, zostanie policzony VaR 95% dla portfela inwestycyjnego wybranych indeksów giełdowych: **NASDAQ100(NDX)**, **RUSSELL2000(RUT)** oraz **NYSE Composite(NYA)**, a następnie zostanie sprawdzone, czy VaR został wyznaczony w odpowiedni sposób używając testu wartości rzeczywistych
+
+## Stopy zwrotu i kursy
+
+Poniżej, w ramach przypomnienia (dokłandniejsza analiza statystyk opisowych w projekcie pierwszym), jak wyglądają kursy oraz stopy zwrotu, można zobaczyć wykresy kursów i logarytmicznych stóp zwrotu wybranych indeksów w latach 2006-2021. 
+
+```{r, echo=TRUE, warning=FALSE}
+dane<-cbind.data.frame(ndx$Date, ndx$Close, rut$Close, nya$Close)
+names(dane)<- c("Date","NDX","RUT","NYA")
+dane$Date<-as.Date(dane$Date)
+ggplot(dane, aes(Date))+
+  geom_line(aes(y=NDX, colour="NDX"))+
+  geom_line(aes(y=RUT, colour="RUT"))+
+  geom_line(aes(y=NYA, colour="NYA"))+
+  ylab("USD($)")+ggtitle("Kursy zamknięcia wybranych indeksów")+
+  theme(plot.title = element_text(hjust = 0.5), legend.title = element_text(hjust = 0.5))+
+  labs(color="Index")
+```
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+library(dplyr)
+ndx<-ndx %>% 
+  select(Date, Close) %>% 
+  mutate(ror=log(Close/lag(Close))*100) %>%
+  slice(2:nrow(ndx))
+
+rut<-rut %>% 
+  select(Date, Close) %>% 
+  mutate(ror=log(Close/lag(Close))*100) %>%
+  slice(2:nrow(rut))
+
+nya<-nya %>% 
+  select(Date, Close) %>% 
+  mutate(ror=log(Close/lag(Close))*100) %>%
+  slice(2:nrow(nya))
+```
+
+```{r, echo=TRUE, warning=FALSE}
+dane<-cbind.data.frame(ndx$Date, ndx$ror, rut$ror, nya$ror)
+names(dane)<- c("Date","NDX","RUT","NYA")
+dane$Date<-as.Date(dane$Date)
+ggplot(dane, aes(Date))+
+  geom_line(aes(y=NDX, colour="NDX"))+
+  geom_line(aes(y=RUT, colour="RUT"))+
+  geom_line(aes(y=NYA, colour="NYA"))+
+  ylab("Stopa zwrotu(%)")+ggtitle("Logarytmiczne stopy zwrotu")+
+  theme(plot.title = element_text(hjust = 0.5), legend.title = element_text(hjust = 0.5))+
+  labs(color="Index")
+
+dane<-cbind.data.frame(dane, ndx$ror, nya$ror, rut$ror)
+names(dane)<-c("Date","NDX","RUT","NYA","StZwNDX","StZwNYA","StZwRUT")
+zwroty<-cbind.data.frame(ndx$ror, nya$ror, rut$ror)
+names(zwroty)<-c("NDX","NYA","RUT")
+```
+
+## Korelacje i autokorelacje
+
+Poniżej można zobaczyć, jak w ujęciu całościowym wyglądają korelacje liniowe pearsona między zmiennymi, a także jak wygląda autokorelacja poszczególnych stóp zwrotu.
+
+
+```{r,echo=TRUE,warning=FALSE,out.width = "120%"}
+q4<-ggcorrplot(cor(dane[c("StZwNDX","StZwNYA","StZwRUT")]),lab = T)+labs(color="korelacja")
+
+a1<-acf(dane$StZwNDX, plot = F)
+acf1<-with(a1, data.frame(lag, acf))
+
+a2<-acf(dane$StZwRUT, plot = F)
+acf2<-with(a2, data.frame(lag, acf))
+
+a3<-acf(dane$StZwNYA, plot = F)
+acf3<-with(a3, data.frame(lag, acf))
+
+q1 <- ggplot(data = acf1, mapping = aes(x = lag, y = acf)) +
+  geom_hline(aes(yintercept = 0)) +
+       geom_hline(aes(yintercept = 0.05),linetype = "longdash",colour="blue") +
+          geom_hline(aes(yintercept = -0.05),linetype = "longdash", colour="blue") +
+          geom_segment(mapping = aes(xend = lag, yend = 0))+
+  ggtitle("Autokorelacje NDX")+xlab("Opóźnienie")+ylab("Autokorelacja")
+q2 <- ggplot(data = acf2, mapping = aes(x = lag, y = acf)) +
+  geom_hline(aes(yintercept = 0)) +
+       geom_hline(aes(yintercept = 0.05),linetype = "longdash",colour="blue") +
+          geom_hline(aes(yintercept = -0.05),linetype = "longdash", colour="blue") +
+          geom_segment(mapping = aes(xend = lag, yend = 0))+
+  ggtitle("Autokorelacje RUT")+xlab("Opóźnienie")+ylab("Autokorelacja")
+q3 <- ggplot(data = acf3, mapping = aes(x = lag, y = acf)) +
+       geom_hline(aes(yintercept = 0)) +
+        geom_hline(aes(yintercept = 0.05),linetype = "longdash",colour="blue") +
+          geom_hline(aes(yintercept = -0.05),linetype = "longdash", colour="blue") +
+          geom_segment(mapping = aes(xend = lag, yend = 0))+
+  ggtitle("Autokorelacje NYA")+xlab("Opóźnienie")+ylab("Autokorelacja")
+
+
+
+figure1 <- multi_panel_figure(columns = 2, rows = 2, panel_label_type = "none", width = 200)
+
+figure1 %<>%
+  fill_panel(q1, column = 1, row = 1) %<>%
+  fill_panel(q2, column = 2, row = 1) %<>%
+  fill_panel(q3, column = 1, row = 2) %<>%
+  fill_panel(q4, column = 2, row = 2)
+
+figure1
+
+```
+
+Jak widac, w ujęciu całościowym korelacja plausje się na bardzo wysokim dodatnim poziomie. Wskazuje to na silną zalezność pomiędzy stopami zwrotu indeksów. Jednak w następnym rozdziale, zostanie pokazana korelacja pearsona uwzględniając okna czasowe.
+
+
+# Monitorowanie korelacji
+
+## Metoda korelacji pearsona T=30
+
+W tej metodzie, korelacja na dzień **t** liczona jest z 30 obserwacji pomiędzy dniami **t a t-30**. Obliczenia zostały wykonane dwukrotnie, za pierwszym razem używając funkcji wbudowanej *corr* - czyli przyjmując, że **E(u1) != 0 oraz E(u2) != 0**. Za drugim z kolei obliczenia zostały wykonane własnoręcznie, przyjmując, że **E(u1) = 0 oraz E(u2) = 0**. Na poniższym wykresie, można zobaczyć jak wyglądają korelacje pearsona w ujęciu czasowym, i jakie sa między nimi różnice.
+
+
+```{r, echo=TRUE, warning=FALSE,out.width = "120%"}
+
+lambda = 0.94
+dane$NDXRUTPT30<-NA
+dane$NDXNYAPT30<-NA
+dane$NYARUTPT30<-NA
+
+dane$NDXRUTP2T30<-NA
+dane$NDXNYAP2T30<-NA
+dane$NYARUTP2T30<-NA
+
+dane$StZwNDX<-(-1)*dane$StZwNDX/100
+dane$StZwRUT<-(-1)*dane$StZwRUT/100
+dane$StZwNYA<-(-1)*dane$StZwNYA/100
+
+for (i in seq(1,nrow(dane)-30,1)){
+  f <- dane[i:(29+i),]
+  dane$NDXRUTPT30[i+29]<-cor(f$StZwNDX,f$StZwRUT)
+  dane$NDXNYAPT30[i+29]<-cor(f$StZwNDX,f$StZwNYA)
+  dane$NYARUTPT30[i+29]<-cor(f$StZwNYA,f$StZwRUT)
+  
+  cov<-sum(f$StZwNDX * f$StZwRUT)/30
+  var1<-sum(f$StZwNDX^2)/30
+  var2<-sum(f$StZwRUT^2)/30
+  cp<-cov/(sqrt(var1*var2))
+  dane$NDXRUTP2T30[i+29]<-cp
+  
+  cov<-sum(f$StZwNDX * f$StZwNYA)/30
+  var1<-sum(f$StZwNDX^2)/30
+  var2<-sum(f$StZwNYA^2)/30
+  cp<-cov/(sqrt(var1*var2))
+  dane$NDXNYAP2T30[i+29]<-cp
+  
+  cov<-sum(f$StZwNYA * f$StZwRUT)/30
+  var1<-sum(f$StZwNYA^2)/30
+  var2<-sum(f$StZwRUT^2)/30
+  cp<-cov/(sqrt(var1*var2))
+  dane$NYARUTP2T30[i+29]<-cp
+}
+
+dane$RoznicaNDXRUT<-abs(dane$NDXRUTPT30-dane$NDXRUTP2T30)
+dane$RoznicaNDXNYA<-abs(dane$NDXNYAPT30-dane$NDXNYAP2T30)
+dane$RoznicaNYARUT<-abs(dane$NYARUTPT30-dane$NYARUTP2T30)
+
+q1<-ggplot(dane, aes(x=Date))+
+  geom_point(aes(y=RoznicaNDXRUT, colour="NDX/RUT"))+
+  geom_point(aes(y=RoznicaNDXNYA, colour="NDX/NYA"))+
+  geom_point(aes(y=RoznicaNYARUT, colour="NYA/RUT"))+
+  ylab("")+
+  ggtitle("Różnice pomiędzy korelacjami")+
+  labs(colour="")+
+  xlab("")
+
+q2<-ggplot(dane, aes(x=Date))+
+  geom_line(aes(y=NYARUTP2T30, colour="E(u)=0"))+
+  geom_line(aes(y=NYARUTPT30, colour="E(u)!=0"))+
+  ggtitle("NYA/RUT")+
+  ylab("")+
+  labs(colour="")+
+  xlab("")
+
+q3<-ggplot(dane, aes(x=Date))+
+  geom_line(aes(y=NDXNYAP2T30, colour="E(u)=0"))+
+  geom_line(aes(y=NDXNYAPT30, colour="E(u)!=0"))+
+  ggtitle("NYA/NDX")+
+  ylab("")+
+  labs(colour="")+
+  xlab("")
+
+q4<-ggplot(dane, aes(x=Date))+
+  geom_line(aes(y=NDXRUTP2T30, colour="E(u)=0"))+
+  geom_line(aes(y=NDXRUTPT30, colour="E(u)!=0"))+
+  ggtitle("NDX/RUT")+
+  ylab("")+
+  labs(colour="")+
+  xlab("")
+
+grid.arrange(q1, q2, q3, q4, nrow = 2, ncol=2)
+
+
+```
+
+Pierwszą istotną obserwacją z powyższych wykresów, jest fakt, że w przeciwieństwie do korelacji Pearsona w ujęciu całościowym (która była na poziomie silnej zalezności), współczynniki korelacji, mimo, że w wiekszości wysokie, spadają miejscami nawet do wartości 0.4, co oznacza znacznie słabszą korelacje między stratami.
+
+Drugim inbteresującym faktem, jest to, że różnice pomiędzy sposobami liczenia korelacji sa względnie niewielkie i w większości mieszczą się w przedziale **[0; 0.025]**.Z drugiej strony widać jednak, że w niektórych miejscach współczynniki korelacji różnią się już znacznie, bo aż o 0.1, czy nawet dla NDX/RUT 0.125.
+
+## Metoda EWMA
+
+Poniżej wyznaczono korelacje z użyciem modelu EWMA, zgodnie ze wzorem korelacji liniowej Pearsona:
+
+$$\rho_n = \frac{cov_n(x,y)}{\sigma_{n,x}\sigma_{n,y}}$$
+
+W tym wypadku jednak \sigma oznacza zmienność modelowaną przy użyciu metody EWMA na dzień n, a cov oznacza kowariancje, modelowaną w podobny sposób, również na dzień n. Oba równania przedstawiono poniżej:
+
+$$ cov_n(x,y) = \lambda cov_{n-1}+(1-\lambda)x_{n-1}y_{n-1} $$
+$$\sigma_{n,x}^2 = \lambda \sigma_{n-1,x}^2+(1-\lambda)x_{n-1}^2$$
+Tak wymodelowaną korelacje, przedstawiono na poniższym wykresie zestawioną z poprzednimi, na przykładzie korelacji między NDX/RUT.
+
+```{r}
+
+dane$NDXRUTEWMACOR<-NA
+dane$NDXNYAEWMACOR<-NA
+dane$NYARUTEWMACOR<-NA
+
+dane$NDXewmaVOL<-NA
+dane$RUTewmaVOL<-NA
+dane$NYAewmaVOL<-NA
+
+dane$NDXRUTEWMACOV<-NA
+dane$NDXNYAEWMACOV<-NA
+dane$NYARUTEWMACOV<-NA
+
+dane$NDXewmaVOL[2]<-(1-lambda)*(dane$StZwNDX[1])^2
+dane$RUTewmaVOL[2]<-(1-lambda)*(dane$StZwRUT[1])^2
+dane$NYAewmaVOL[2]<-(1-lambda)*(dane$StZwNYA[1])^2
+
+dane$NDXRUTEWMACOV[2]<-(1-lambda)*(dane$StZwNDX[1])*(dane$StZwRUT[1])
+dane$NDXNYAEWMACOV[2]<-(1-lambda)*(dane$StZwNDX[1])*(dane$StZwNYA[1])
+dane$NYARUTEWMACOV[2]<-(1-lambda)*(dane$StZwNYA[1])*(dane$StZwRUT[1])
+
+dane$NDXRUTEWMACOR[2]<-dane$NDXRUTEWMACOV[2]/(sqrt(dane$NDXewmaVOL[2]*dane$RUTewmaVOL[2]))
+dane$NDXNYAEWMACOR[2]<-dane$NDXNYAEWMACOV[2]/(sqrt(dane$NDXewmaVOL[2]*dane$NYAewmaVOL[2]))
+dane$NYARUTEWMACOR[2]<-dane$NYARUTEWMACOV[2]/(sqrt(dane$NYAewmaVOL[2]*dane$RUTewmaVOL[2]))
+
+for (i in seq(3,nrow(dane),1)){
+  
+dane$NDXewmaVOL[i]<-(1-lambda)*(dane$StZwNDX[i-1])^2+(lambda*dane$NDXewmaVOL[i-1])
+dane$RUTewmaVOL[i]<-(1-lambda)*(dane$StZwRUT[i-1]^2)+(lambda*dane$RUTewmaVOL[i-1])
+dane$NYAewmaVOL[i]<-(1-lambda)*(dane$StZwNYA[i-1]^2)+(lambda*dane$NYAewmaVOL[i-1])
+
+dane$NDXRUTEWMACOV[i]<-(1-lambda)*(dane$StZwNDX[i-1])*(dane$StZwRUT[i-1])+(lambda*dane$NDXRUTEWMACOV[i-1])
+dane$NDXNYAEWMACOV[i]<-(1-lambda)*(dane$StZwNDX[i-1])*(dane$StZwNYA[i-1])+(lambda*dane$NDXNYAEWMACOV[i-1])
+dane$NYARUTEWMACOV[i]<-(1-lambda)*(dane$StZwNYA[i-1])*(dane$StZwRUT[i-1])+(lambda*dane$NYARUTEWMACOV[i-1])
+
+dane$NDXRUTEWMACOR[i]<-dane$NDXRUTEWMACOV[i]/sqrt(dane$NDXewmaVOL[i]*dane$RUTewmaVOL[i])
+dane$NDXNYAEWMACOR[i]<-dane$NDXNYAEWMACOV[i]/sqrt(dane$NDXewmaVOL[i]*dane$NYAewmaVOL[i])
+dane$NYARUTEWMACOR[i]<-dane$NYARUTEWMACOV[i]/sqrt(dane$NYAewmaVOL[i]*dane$RUTewmaVOL[i])
+
+}
+
+ggplot(dane, aes(x=Date))+
+  geom_line(aes(y=NDXRUTEWMACOR, colour="EWMA"))+
+  geom_line(aes(y=NDXRUTP2T30, colour="E(u)=0"))+
+  geom_line(aes(y=NDXRUTPT30, colour="E(u)!=0"))+
+  xlab("")+ylab("")+ggtitle("Współczynniki korelacji NDX/RUT w czasie")+labs(colour="")
+
+
+
+
+```
+
+Jak widać wszystkie współczynniki korelacji w mniejszym lub wiekszym stopniu nakładają się na siebie. Warto też wspomnieć, że dla metody Pearsona tracimy pierwsze 30 obserwacji. W przypadku wykorzystania EWMA, co prawda pierwsza obserwacja fałszywie zawsze będzie równa 1, ale w paru następnych korelacja osiąga już wartośi bliskie rzeczywistym.
+
+## Metoda GARCH(1,1)
+
+Do wyznaczenia korelacji przy pomocy modelu GARCH(1,1) użyty zostanie wzór korelacji liniowej Pearsona poprzedniej sekcji, z zastrzeżeniem, że podobnie jak w przypadku modelu EWMA, kowariancja oraz zmienność liczone są z użyciem modelu GARCH(1,1):
+
+
+$$ cov_n(x,y) = \gamma cov_{x,y}+ \beta cov_{n-1}+\alpha x_{n-1}y_{n-1} $$
+
+$$\sigma_{n,x}^2 = \gamma \sigma_x^2+ \beta \sigma_{n-1,x}^2+\alpha x_{n-1}^2$$
+
+Korelacje dla metody GARCH(1,1) zostały obliczone przy uzyciu pakietu **rmgarch** oferującym dopasowanie się do wielowymiarowego modelu garch. Ważnym założeniem dotyczącym estymacji parametrów jest to, że zakładamy, że zmienne mają wielowymiarowy (3-rzędu) rozkład teoretyczny. W estymacji, użyte zostały:
+
+* rozkład normalny, 
+
+* rozkład laPlace'a, 
+
+* rozkład t-Studenta.
+
+
+```{r, message=FALSE}
+
+library(fGarch)
+library(rmgarch)
+library(parallel)
+
+Dat = as.data.frame(cbind(dane$StZwNDX, dane$StZwNYA, dane$StZwRUT))
+names(Dat)<-c("StZwNDX","StZwNYA","StZwRUT")
+row.names(Dat)<-dane$Date
+
+xspec = ugarchspec(mean.model = list(armaOrder = c(1, 1)), variance.model = list(garchOrder = c(1,1), model = 'eGARCH'), distribution.model = 'norm')
+uspec = multispec(replicate(3, xspec))
+spec1 = dccspec(uspec = uspec, dccOrder = c(1, 1), distribution = 'mvnorm')
+spec1a = dccspec(uspec = uspec, dccOrder = c(1, 1), model='aDCC', distribution = 'mvnorm')
+spec2 = dccspec(uspec = uspec, dccOrder = c(1, 1), distribution = 'mvlaplace')
+spec2a = dccspec(uspec = uspec, dccOrder = c(1, 1), model='aDCC', distribution = 'mvlaplace')
+
+cl = makePSOCKcluster(10)
+multf = multifit(uspec, Dat, cluster = cl)
+fit1 = dccfit(spec1, data = Dat, fit.control = list(eval.se = TRUE), fit = multf, cluster = cl)
+fit1a = dccfit(spec1a, data = Dat, fit.control = list(eval.se = TRUE), fit = multf, cluster = cl)
+fit2 = dccfit(spec2, data = Dat, fit.control = list(eval.se = TRUE), fit = multf, cluster = cl)
+fit2a = dccfit(spec2a, data = Dat, fit.control = list(eval.se = TRUE), fit = multf, cluster = cl)
+
+
+spec3 = dccspec(uspec = uspec, dccOrder = c(1, 1), distribution = 'mvt')
+fit3 = dccfit(spec3, data = Dat, fit.control = list(eval.se = FALSE), fit = multf)
+mvt.shape = rshape(fit3)
+
+mvt.l = rep(0, 6)
+mvt.s = rep(0, 6)
+mvt.l[1] = likelihood(fit3)
+mvt.s[1] = mvt.shape
+for (i in 1:5) {
+xspec = ugarchspec(mean.model = list(armaOrder = c(1, 1)), variance.model = list(garchOrder = c(1,1), model = 'eGARCH'), distribution.model = 'std', fixed.pars = list(shape = mvt.shape))
+spec3 = dccspec(uspec = multispec(replicate(3, xspec)), dccOrder = c(1,1), distribution = 'mvt')
+fit3 = dccfit(spec3, data = Dat, solver = 'solnp', fit.control = list(eval.se = FALSE))
+mvt.shape = rshape(fit3)
+mvt.l[i + 1] = likelihood(fit3)
+mvt.s[i + 1] = mvt.shape
+}
+
+xspec = ugarchspec(mean.model = list(armaOrder = c(1, 1)), variance.model = list(garchOrder = c(1,1), model = 'eGARCH'), distribution.model = 'std', fixed.pars = list(shape = mvt.shape))
+spec3 = dccspec(uspec = multispec(replicate(3, xspec)), dccOrder = c(1, 1), distribution = 'mvt', fixed.pars = list(shape = mvt.shape))
+fit3 = dccfit(spec3, data = Dat, solver = 'solnp', fit.control = list(eval.se = TRUE), cluster = cl)
+
+library(timeSeries)
+R1 = rcor(fit1)
+R2 = rcor(fit2)
+R3 = rcor(fit3)
+stopCluster(cl)
+
+ndxrut<-as.data.frame(R1[1,3,])
+nyarut<-as.data.frame(R1[2,3,])
+ndxnya<-as.data.frame(R1[1,2,])
+names(ndxrut)<-"V1"
+names(nyarut)<-"V1"
+names(ndxnya)<-"V1"
+
+dane$ndxrutGarchCORN<-ndxrut$V1
+dane$nyarutGarchCORN<-nyarut$V1
+dane$ndxnyaGarchCORN<-ndxnya$V1
+
+ndxrut<-as.data.frame(R2[1,3,])
+nyarut<-as.data.frame(R2[2,3,])
+ndxnya<-as.data.frame(R2[1,2,])
+names(ndxrut)<-"V1"
+names(nyarut)<-"V1"
+names(ndxnya)<-"V1"
+
+dane$ndxrutGarchCORL<-ndxrut$V1
+dane$nyarutGarchCORL<-nyarut$V1
+dane$ndxnyaGarchCORL<-ndxnya$V1
+
+ndxrut<-as.data.frame(R3[1,3,])
+nyarut<-as.data.frame(R3[2,3,])
+ndxnya<-as.data.frame(R3[1,2,])
+names(ndxrut)<-"V1"
+names(nyarut)<-"V1"
+names(ndxnya)<-"V1"
+
+dane$ndxrutGarchCORT<-ndxrut$V1
+dane$nyarutGarchCORT<-nyarut$V1
+dane$ndxnyaGarchCORT<-ndxnya$V1
+```
+
+
+```{r}
+
+ggplot(dane, aes(x=Date))+
+  geom_line(aes(y=ndxrutGarchCORN, colour="Wielowymiarowy normalny"))+
+  geom_line(aes(y=ndxrutGarchCORL, colour="Wielowymiarowy LaPlace'a"))+
+  geom_line(aes(y=ndxrutGarchCORT, colour="Wielowymiarowy t-Studenta"))+
+  xlab("")+ylab("")+ggtitle("Współczynniki korelacji NDX/RUT w czasie estymowane modelem GARCH(1,1) w zalezności od użytego rozkładu")+labs(colour="")+theme(plot.title = element_text( size=9))
+
+```
+
+Jak widać na przykładzie korelacji NDX z RUT estymacja jej, nie zależy od wykorzystanego rozkładu teoretycznego. Różnice są nieznaczne, i mimo występowania ich w niektórych miejscach, są one zdecydowanie mniejsze niż w przypadku estymacji koralacji Pearsona z oknem T=30, w podziale na E(u)=0, oraz E(u)!=0. W przypadku pozostałych korelacji jest podobnie.
+
+Do wyznaczenia wartości VaR 95%, będzie jeszcze potrzebna zmienność wyestymowana za pomoca modelu GARCH(1,1) wg wcześniej przywołanego wzoru.
+
+```{r, include=FALSE}
+
+garchZmiennosc <- garchFit(StZwNDX~garch(1,1),
+                     data=dane,
+                     cond.dist = "norm",
+                     trace=T,
+                     include.mean=F)
+
+
+dane$NDXgarchVOL<-garchZmiennosc@sigma.t^2
+
+garchZmiennosc <- garchFit(StZwRUT~garch(1,1),
+                     data=dane,
+                     cond.dist = "norm",
+                     trace=T,
+                     include.mean=F)
+
+dane$RUTgarchVOL<-garchZmiennosc@sigma.t^2
+
+garchZmiennosc <- garchFit(StZwNYA~garch(1,1),
+                     data=dane,
+                     cond.dist = "norm",
+                     trace=T,
+                     include.mean=T)
+
+dane$NYAgarchVOL<-garchZmiennosc@sigma.t^2
+summary(garchZmiennosc)
+```
+```{r}
+### KORELACJE
+
+ggplot(dane, aes(x=Date))+
+  geom_line(aes(y=NDXewmaVOL, colour="EWMA"))+
+  geom_line(aes(y=NDXgarchVOL, colour="GARCH"))+
+  ggtitle("Zmiennosc dla NDX")+ylab("")+xlab("")+labs(colour="")
+
+```
+
+Na powyższym wykresie została ona pokazana na przykładzie strat dla NDX, i jak widać estymowane zmienności praktycznie się nie różnią. Widoczne piki pokrywają się, w newralgicznych miejscach gdzie dzienne róznice między stratami z zyskami były największe (kryzysy 2007-2008, 2020).
+
+
+
+
+## Wnioski dotyczące korelacji  
+```{r, message=FALSE}
+library(ggplot2)
+library(cowplot)
+library(gridExtra)
+library(ggpubr)
+```
+
+```{r, warning=FALSE, fig.width=15, fig.height=6, out.width="150%"}
+
+q1<-ggplot(dane, aes(x=Date))+
+  geom_line(aes(y=NDXRUTEWMACOR, colour="EWMA"))+
+  geom_line(aes(y=NDXRUTP2T30, colour="E(u)=0"))+
+  geom_line(aes(y=NDXRUTPT30, colour="E(u)!=0"))+
+  geom_line(aes(y=ndxrutGarchCORN, colour="GARCH mvn"))+
+  xlab("")+ylab("")+ggtitle("NDX/RUT")+labs(colour="")+theme( legend.text = element_text(size=15), legend.key.size = unit(2,"cm"))
+
+leg <- get_legend(q1)
+
+q1<-q1+theme(legend.position = "none")
+
+q2<-ggplot(dane, aes(x=Date))+
+  geom_line(aes(y=NDXNYAEWMACOR, colour="EWMA"))+
+  geom_line(aes(y=NDXNYAP2T30, colour="E(u)=0"))+
+  geom_line(aes(y=NDXNYAPT30, colour="E(u)!=0"))+
+  geom_line(aes(y=ndxnyaGarchCORN, colour="GARCH mvn"))+
+  xlab("")+ylab("")+ggtitle("NDX/NYA")+labs(colour="")+theme(legend.position = "none")
+
+q3<-ggplot(dane, aes(x=Date))+
+  geom_line(aes(y=NYARUTEWMACOR, colour="EWMA"))+
+  geom_line(aes(y=NYARUTP2T30, colour="E(u)=0"))+
+  geom_line(aes(y=NYARUTPT30, colour="E(u)!=0"))+
+  geom_line(aes(y=nyarutGarchCORN, colour="GARCH mvn"))+
+  xlab("")+ylab("")+ggtitle("NYA/RUT")+labs(colour="")+theme(legend.position = "none")
+
+grid.arrange(q1,q2,q3,as_ggplot(leg), ncol=4)
+
+```
+
+Na powyższym wykresie przedstawiono jak względem metody estymacji korelacji wygląda ona w czasie, dla wszystkich strat.
+
+Poprzez zastosowanie monitorowania korelacji pomiędzy stratami poszczególnych indeksów, można przewidzieć jak zachowa się VaR dla portfela w stosunku do VaRu dla pojedynczych indeksów. Uzasadnienie matematyczne byłoby następujące:
+
+Skoro VaR dla metod parametrycznych liczony jest jako
+
+$$VaR = \mu + \sigma N^{-1}(X)$$
+A liniową zmienność portfela jako:
+
+$$\sigma^2_p= \sum^n_{i=1}\sum^n_{j=1}\frac{1}{9}\rho_{ij}\sigma_i\sigma_j $$
+to im większa wartość korelacji, tym większa wartość zmienności portfela -> tym większa wartość VaR. Zatem matematycznie korelacja podnosi ryzyko.
+
+Z analitycznego i rzeczowego punktu widzenia ma to sens, gdyż kiedy korelacja między stratami ejst wysoka, znaczy to, że kiedy jeden indeks spada, drugi również, więc można spodziewać się wiekszej straty. Najbardziej bezpiecznym portfolio byłoby więc takie dobranie indeksów, gdzie korelacja pomiędzy nimi jest wysoko ujemna. Wtedy jeśli jeden instrument by rósł, drugi by spadał wyrównując stopę zwrotu. Oczywiście miałoby to też przełożenie na małe zyski, jednak ryzyko było by bardzo niskie.
+
+
+# VaR 95% dla portfela
+
+Przy obliczaniu VaR 95% dla portfela, przyjęto liniowość, i równe udziały każdego z walorów - NDX, RUT oraz NYA w portfelu. Wagi więc są sobie równe i wynoszą zawsze 1/3. 
+
+Poniżej wykonano obliczenia VaR 95% używając dwóch metod.
+
+## Metoda z wykorzystaniem modelu EWMA
+
+W tym wypadku VaR jest obliczany uwzględniając heteroskedatyczność stóp zwrotu, poprzez uzględnienie zmienności obliczonej modelem EWMA. 
+
+Łączne stopy zwrotu na dzień *i* zostały obliczone jako:
+
+$$u_i= \frac{1}{3} u_{i,NDX} + \frac{1}{3} u_{i,RUT} + \frac{1}{3} u_{i,NYA}$$
+
+A zmienność portfela obliczona metodą liniową jako:
+
+$$\sigma^2_p= \sum^n_{i=1}\sum^n_{j=1}\frac{1}{9}\rho_{ij}\sigma_i\sigma_j $$
+W wyznaczaniu samej wartości VaR został wykorzystany wzór, zakładający normalność łącznych stóp:
+
+$$VaR = \mu + \sigma N^{-1}(X)$$
+
+Ale także zastosowano metode historyczną, po uprzednim zastosowaniu korekty heteroskedastyczności dla stóp zwrotu na dzień n:
+
+$$z_n=u_n\frac{\sigma_{n+1}^2}{\sigma_{n}^2}$$
+
+```{r}
+
+dane.var<-dane
+dane.var$var.EWMA.joined <- NA
+dane.var$var.EWMA.joined2 <- NA
+dane.var$var.EWMA.joined3 <- NA
+dane.var$var.garch <- NA
+dane.var$var.garch2 <- NA
+dane.var$var.garch3 <- NA
+
+
+dane.var$joined.ror<-(1/3)*dane.var$StZwNDX+(1/3)*dane.var$StZwNYA+(1/3)*dane.var$StZwRUT*(-1)
+
+dane.var$joined.ror.vol.ewma<-sqrt(2*dane.var$NDXRUTEWMACOR*(1/3)*(1/3)*dane$NDXewmaVOL*dane.var$RUTewmaVOL+2*dane.var$NDXNYAEWMACOR*(1/3)*(1/3)*dane$NDXewmaVOL*dane.var$NYAewmaVOL+2*dane.var$NYARUTEWMACOR*(1/3)*(1/3)*dane$NYAewmaVOL*dane.var$RUTewmaVOL+(1/3)*(1/3)*dane$NDXewmaVOL*dane$NDXewmaVOL+(1/3)*(1/3)*dane$RUTewmaVOL*dane$RUTewmaVOL+(1/3)*(1/3)*dane$NYAewmaVOL*dane$NYAewmaVOL)
+
+dane.var$joined.ror.vol.garch<-sqrt(2*dane.var$ndxrutGarchCORN*(1/3)*(1/3)*dane$NDXgarchVOL*dane.var$RUTgarchVOL+2*dane.var$ndxnyaGarchCORN*(1/3)*(1/3)*dane$NDXgarchVOL*dane.var$NYAgarchVOL+2*dane.var$nyarutGarchCORN*(1/3)*(1/3)*dane$NYAgarchVOL*dane.var$RUTgarchVOL+(1/3)*(1/3)*dane$NDXgarchVOL*dane$NDXgarchVOL+(1/3)*(1/3)*dane$RUTgarchVOL*dane$RUTgarchVOL+(1/3)*(1/3)*dane$NYAgarchVOL*dane$NYAgarchVOL)
+
+for (i in seq(1,nrow(dane.var)-250,1)){
+  f <- dane.var[i:(249+i),]
+  f<-f %>% mutate(Z = joined.ror * lead(joined.ror.vol.ewma)/joined.ror.vol.ewma)
+  q99<-quantile(f$Z, .95, na.rm = T)
+  dane.var$var.EWMA.joined[250+i] <- q99
+
+    f <- dane.var[i:(249+i),]
+  f<-f %>% mutate(Z = joined.ror * lead(joined.ror.vol.garch)/joined.ror.vol.garch)
+  q99<-quantile(f$Z, .95, na.rm = T)
+  dane.var$var.garch[250+i] <- q99
+  ## wszystko?
+  dane.var$var.EWMA.joined2[250+i] <-mean(f$joined.ror)+1.64*dane.var$joined.ror.vol.ewma[250+i]*sqrt(250)
+  dane.var$var.garch2[250+i]<-mean(f$joined.ror)+1.64*dane.var$joined.ror.vol.garch[250+i]*sqrt(250)
+}
+```
+
+```{r}
+ggplot(dane.var, aes(x=Date))+
+  geom_line(aes(y=joined.ror, colour="Strata"))+
+  geom_line(aes(y=var.EWMA.joined, colour="VAR95%"))+
+  geom_line(aes(y=var.EWMA.joined2, colour="VAR95% 2"))+
+  ggtitle("VaR dla portfela EWMA")
+
+```
+Na powyższym wykresie widać obliczony VaR 95% dla portfela. Widać, że wartości VaRu po korekcie heteroskedastyczności są bardzo niskie - najwyższa to okolice 2%, a dla wartości VaR 95% liczonego ze wzoru w większości bardzo zaniżone, z dwoma wysokimi pikami. Nakazuje to sądzić, że wizualnie VaR ze wzoru parametrycznego jest wyznaczony źle. Dzieje się tak dlatego, że przyjęto założenie o normalności rozkładu stóp zwrotu, którego nie ma. Żeby mieć jednak pewność można wykonać testy na normalność:
+
+```{r}
+shapiro.test(dane.var$joined.ror)
+jarqueberaTest(dane.var$joined.ror)
+```
+I jak można było się spodziewać, nie ma podstaw by sądzić, że stopy zwrotu portfolio mają rozkład normalny na mocy przeprowadzonych testów.
+
+## Metoda z użyciem zmienności obliczonej GARCH(1,1)
+
+```{r}
+ggplot(dane.var, aes(x=Date))+
+  geom_line(aes(y=joined.ror, colour="Strata"))+
+  geom_line(aes(y=var.garch,colour="VaR95%"))+
+  geom_line(aes(y=var.garch2, colour="VaR95% 2"))+
+  ggtitle("VaR dla portfela GARCH(1,1)")
+
+```
+Patrząc na poniższy wykres można stwierdzić, że jedyne czym różni się od VaR 95% EWMA, to wyższe piki w okolicy kryzysów (Garch szybciej i mocniej reaguje na silne zmiany stóp zwrotu niż Ewma). Jednak aby dokładnie porównać oba VaRy, przedstawiono je na wspólnym wykresie.
+
+```{r}
+ggplot(dane.var, aes(x=Date))+
+  geom_line(aes(y=var.EWMA.joined,colour="EWMA"))+
+  geom_line(aes(y=var.garch, colour="GARCH"))+
+  geom_line(aes(y=var.EWMA.joined2, colour="EWMA2"))+
+  geom_line(aes(y=var.garch2, colour="GARCH2"))+
+  ggtitle("Porównanie VaR 95%")+labs(colour="")
+
+```
+Z tego wykresu widać już wyraźnie, że VaR 95% wyznaczony metodą EWMA, przez zdecydowana większość czasu utrzymuje się poniżej wartości VaR wyznaczonego druga metodą. Można zatem postawić hipotezę, że VaR EWMA jest zaniżony. Aby ją sprawdzić, zostanie wykonany test wartości rzeczywistych.
+
+## Test wartości rzeczywistych
+
+```{r, fig.height=2}
+
+
+przekroczenia.EWMA<-0
+przekroczenia.G<-0
+
+przekroczenia.EWMA2<-0
+przekroczenia.G2<-0
+for(i in c(252:4026)){
+  
+  if(dane.var$var.EWMA.joined[i]<dane.var$joined.ror[i]){
+    przekroczenia.EWMA<-przekroczenia.EWMA+1
+  }
+  if(dane.var$var.garch[i]<dane.var$joined.ror[i]){
+    przekroczenia.G<-przekroczenia.G+1
+  }
+  if(dane.var$var.EWMA.joined2[i]<dane.var$joined.ror[i]){
+    przekroczenia.EWMA2<-przekroczenia.EWMA2+1
+  }
+  if(dane.var$var.garch2[i]<dane.var$joined.ror[i]){
+    przekroczenia.G2<-przekroczenia.G2+1
+  }
+}
+
+procent.EWMA<-przekroczenia.EWMA/3775
+procent.G<-przekroczenia.G/3775
+procent.EWMA2<-przekroczenia.EWMA2/3775
+procent.G2<-przekroczenia.G2/3775
+df<-data.frame(EWMA =c(round(procent.EWMA,2),round(procent.EWMA2,2)), GP =c(round(procent.G,2),round(procent.G2,2)) )
+names(df)<-c("VaR 95% EWMA", "VaR 95% GARCH(1,1)")
+
+table <- ggtexttable(df, rows = NULL, 
+                        theme = ttheme("mBlue",base_size = 11))
+tab_add_title(table,text="Procent odrzuceń testu", hjust=-0.08)
+
+
+
+```
+
+Według tabeli po przeprowadzeniu testu wartości rzeczywistych na obu obliczonych VaRach, oba mieszczą się w zakresie 5%, a co za tym idzie, oba VaRy wyznaczone metodą historyczną według testu wartości rzeczywistych są wyznaczone poprawnie. Z kolei jak się tego spodziewano wizualnie, estymacja VaR przy pomocy równania na VaR parametryczny jest niedoszacowana ze względu na niesłuszne założenia (więcej we wnioskach końcowych)
+
+
+## Próba zastosowania kopuł 
+
+*Myślę, że co do zasady udało mi się zrozumieć na czym polega modelowanie korelacji przy kopułach, jednak nie miałem okazji ani czasu spróbować. W ramach opisu przedstawiam więc krótki opis czynności które bym wykonał.*
+
+* Dla przesuwającego się okna X obserwacji, dopasowuję znany rozkład teoretyczny - w R można się pokusić o funkcje automatycznie dopasowującą najlepsze rozkłady do wykonania złączenia. 
+
+* Po dopasowaniu odpowiednich rozkładów teoretycznych wyznaczam ich złączenie, czyli dwuwymiarowy wybrany rozkład teoretyczny
+
+* Daje to dostęp do parametru sigma wyznaczonego rozkładu będącego macierzą symetrzyczną 2x2, z której wartość na dolnej przekątnej jest wartością korelacji między stopami zwrotu w czasie okna X
+
+Tak wymodelowane korelacje zbieram przesuwając okno po danych, i używam ich do wyznaczenia zmienności portfolio.
+
+# Końcowe wnioski - nagięcie rzeczywistości
+
+W tym rozdziale przedstawiono błędy popełnione podczas tworzenia projektu.
+
+Co do zasady, to część z korelacjami powinna być w porządku - użycie modelu DCC-GARCH daje możliwość śledzenia korelacji między wieloma zmiennymi na raz, korelacje z EWMA powinny być poprawne bo są liczone ręcznie.
+
+Z kolei jeśli chodzi o VaR oraz zmienność, pojawia się problem natury merytorycznej - błędnie przyjęte założenia o rozkładzie normalnym stóp zwrotu.
+Z uwagi na to w wyszczególnionym fragmencie kodu, przy uzyciu funkcji garchFit
+
+garchZmiennosc <- garchFit(StZwNDX~garch(1,1),
+                     data=dane,
+                     **cond.dist = "norm"**,
+                     trace=T,
+                     **include.mean=F**)
+
+Garch został wyestymowany w oparciu o warunkowy rozkład normalny - co jest nieprawdą, należałoby więc dopasować odpowiedni rozkład do danych i na jego podstawie estymować GARCH.
+
+Następnym błędem jest estymacja Garcha i EWMA do nie tych danych co trzeba - model dopasowuje się do całości danych, podczas gdy dopasowanie powinno byc do okna (w przypadku projektu 250 dni) czasowego. Dla tak policzonej zmienności następnie powinna zostać wyznaczona prognoza. co do zasady modelując zmienność GARCHem lub EWMA chce się uzyskać prognozę zmienności na dzień następny. Rzetelnie wykonanym obliczeniem VaR byłoby więc dopasowanie się do okna, prognoza wartości na dzień następny (251), wyznacznie VaRu ze wzoru (więcej uwag do wzoru poniżej), a następnie przesuwanie pętlą okna aż do końca danych.
+
+Co do samego wzoru VaRu:
+
+$$VaR=\mu+\sigma N^{-1}(X)$$
+
+Wartość N^(-1)(x) to przecież wartość krytyczna dla odwróconego rozkładu normalnego, i można jej użyć tylko jeżeli stopy zwrotu rzeczywiście takowy rozkład mają. Aby dopracować projekt, należałoby sprawdzić jaki rozkład teoretyczny najlepiej się dopasowuje do danych a następnie to z niego pobrać wartość krytyczną, lepszy od rozkładu normalnego jest chociażby t-Studenta z jednym stopniem swobody, czy jakieś rozkłady wykładnicze (np.Laplace'a).
+
+W ramach ulepszenia (nie poprawy błędu) mu, możnaby estymować z jakiegoś modelu typu ARIMA, MA czy AR, a nawet GARCH przy przekazaniu **include.mean=T**, wtedy ponownie, średnią na następny dzień można prognozować, i dzięki temu VaR wyznaczony będzie metoda prognozowania, a nie opierając się na samej historii - taki dzienny VaR jest nierzetelny, i nie ma zastosowania bo nigdy nie ma wartości VaR na dzień dzisiejszy, więc z VaRu nie ma jak korzystać w praktyce.
+
+Ostatnim komentarzem - od siebie, jest to, że nie jestem pewien czy mozna postąpić jak postąpiłem w korekcie heteroskedastyczności, z jednej strony VaR wychodzi na oko dobry, również potwierdzony testem. Ale z drugiej tak na prwadę nie mam 100% pewności czy tak można.
+
+
+

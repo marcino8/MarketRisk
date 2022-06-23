@@ -1,0 +1,1787 @@
+---
+title: "Badanie ryzyka rynkowego i analiza VaR dla indeksów giełdowych NASDAQ100, RUSSELL2000 oraz NYSE Composite na podstawie danych dziennych z lat 2016-2021"
+output: html_document
+author: Marcin Klimczak
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.align = "center")
+set.seed(1246)
+```
+
+# Wprowadzenie
+
+Celem projektu i przeprowadzanego badania jest sprawdzenie jak bardzo ryzykowne jest inwestowanie kapitału w wybrane indeksy giełdowe.
+
+W projekcie badane będą trzy indexy:
+
+* NASDAQ100 (NDX) - Jest koszykiem 100 największych, najchętniej handlowanych akcji spółek znajdujących się na liście NASDAQ (z ang. "National Association of Securities Dealers Automated Quotations", czyli globalny rynek handlowania papierami wartościowymi).
+
+* RUSSELL2000 (RUT) - Jest koszykiem 2000 mniejszych spółek wliczanych w Indeks Russell 3000, któRy z kolei zawira 97% papierów wartościowych handlowanych w USA. Index RUSSELL2000 jest uważany powszechnie za wyznacznik jak radzą sobie mniejsze korporacje na rynku (kapitalizacja na rynku 300 mln - 2 mld USD)
+
+* NYSE Composite (NYA) - Obrazuje jak radzą sobie akcje z New York Stock Exchange. Obejmuje ponad 2400 spółek. Przez swoją rozległość, uważany jest za indeks dobrze obrazujący obecną sytuacje rynkową.
+
+
+Ponieważ wszystkie indeksy dotyczą obrotów papierami wartościowymi z rynków międzynarodowych i giełdy USA, można wysnuć hipotezę, że zarówno pomiędzy kursami, jak i stopami zwrotów, będą występowały wysokie wartości korelacji liniowej.
+
+
+## Opis danych 
+
+Dane do projektu zostały pobrane ze strony finance.yahoo.com.
+
+Pobrane zostały dzienne wartości zamknięcia kursów wyżej wymienionych indeksów, na przestrzeni czasu 01/01/2006 - 31/12/2021. 
+
+Dane zawierają 4027 obserwacji.
+
+```{r, echo=FALSE, message=FALSE}
+rm(list=ls())
+library(ggplot2)
+library(dplyr)
+library(ExtDist)
+library(reshape2)
+library(ggpubr)
+library(ggcorrplot)
+library(ggridges)
+library(lubridate)
+library(multipanelfigure)
+library(cowplot)
+library(spatstat)
+library(MTS)
+library(GAS)
+ndx<-read.csv("NASDAQ100.csv")
+rut<-read.csv("RUSSELL2000.csv")
+nya<-read.csv("Nyse Composite Index.csv")
+```
+
+```{r}
+ndx<-ndx %>% mutate(percentage = (High - Open)/Open) %>% mutate(Date = as.Date(Date))
+ndxf<-ndx %>% filter(percentage<=0.001)
+a<-ggplot(ndx, aes(x=Date, y=percentage))+geom_line()
+for(i in c(1:nrow(ndxf))){
+  a<-a+geom_point(x=ndxf$Date[i], y=0, colour="red")
+}
+a
+suma<-0
+for(i in c(1:nrow(ndx))){
+  suma<-suma - (ndx$Open[i]+3)*0.01
+  transakcja<-(ndx$Open[i]+3)*0.01
+  if(ndx$percentage[i]<0.0001){
+    suma<-suma+0.01*ndx$Open[i]*0.99
+  }
+  else{
+    suma<-suma+1.0001*transakcja
+  }
+}
+suma
+
+
+
+```
+## Stopy zwrotu i kursy
+
+Poniżej można zobaczyć wykres kursu indeksów w latach 2006-2021. 
+
+```{r, echo=FALSE, warning=FALSE}
+dane<-cbind.data.frame(ndx$Date, ndx$Close, rut$Close, nya$Close)
+names(dane)<- c("Date","NDX","RUT","NYA")
+dane$Date<-as.Date(dane$Date)
+ggplot(dane, aes(Date))+
+  geom_line(aes(y=NDX, colour="NDX"))+
+  geom_line(aes(y=RUT, colour="RUT"))+
+  geom_line(aes(y=NYA, colour="NYA"))+
+  ylab("USD($)")+ggtitle("Kursy zamknięcia wybranych indeksów")+
+  theme(plot.title = element_text(hjust = 0.5), legend.title = element_text(hjust = 0.5))+
+  labs(color="Index")
+```
+
+Na wykresie widać, że najmniejsze zmiany posiada indeks RUT. W dodatku widać, że wszystkie indeksy mają wyraźnie widoczny trend wzrostowy, za wyjątkiem indeksu RUT, który utrzymuje lekki trend wzrostowy.
+
+Na wykresie, na przykładie indeksu NYA, widać także wyraźnie globalne kryzysy. Widać kryzys finansowy z lat 2007-2009, gdzie kurs odnotowuje wyraźny ciągły spadek, oraz widać kryzys spowodowany wirusem COVID-19, przez charakterystyczny nagły i duzy spadek na początku 2020 roku. Prawdopodobnie te same miejsca charakterystyczne ukażą się równiez w przypadku stóp zwrotu.
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ndx<-ndx %>% 
+  select(Date, Close) %>% 
+  mutate(ror=log(Close/lag(Close))*100) %>%
+  slice(2:nrow(ndx))
+
+rut<-rut %>% 
+  select(Date, Close) %>% 
+  mutate(ror=log(Close/lag(Close))*100) %>%
+  slice(2:nrow(rut))
+
+nya<-nya %>% 
+  select(Date, Close) %>% 
+  mutate(ror=log(Close/lag(Close))*100) %>%
+  slice(2:nrow(nya))
+```
+
+Stopy zwrotu w projekcie zostały policzone jako stopy logarytmiczne zgodnie ze wzorem: 
+$$ U_l(t) = 100*ln(\frac{X_t}{X_{t-1}}) $$.
+
+Poniżej mozna zobaczyć jak prezentują się stopy zwrotu dla poszczególnych indkesów w czasie.
+
+```{r, echo=FALSE, warning=FALSE}
+dane<-cbind.data.frame(ndx$Date, ndx$ror, rut$ror, nya$ror)
+names(dane)<- c("Date","NDX","RUT","NYA")
+dane$Date<-as.Date(dane$Date)
+ggplot(dane, aes(Date))+
+  geom_line(aes(y=NDX, colour="NDX"))+
+  geom_line(aes(y=RUT, colour="RUT"))+
+  geom_line(aes(y=NYA, colour="NYA"))+
+  ylab("Stopa zwrotu(%)")+ggtitle("Logarytmiczne stopy zwrotu")+
+  theme(plot.title = element_text(hjust = 0.5), legend.title = element_text(hjust = 0.5))+
+  labs(color="Index")
+```
+
+Jak widać, stopy zwrotu praktycznie się pokrywają, co wskazuje na ich wysokie korelacje. Do tego, na wykresie widać wspomniane wcześcniej kryzysy gospodarcze (2007-2009 i 2020) z wyraźnie większymi/mniejszymi stopami zwrotów niż na reszcie wykresu.
+
+
+## Rozkłady stóp zwrotu
+
+Aby ocenić ryzyko, potrzeba wiedzieć, jak zachowuje się rozkład empiryczny dziennych stóp zwrotu, i czy nie może on zostać uznany za jeden lub więcej z rozkładów teoretycznych.
+
+Najpierw jednak, poniżej zaprezentowano wartości stóp zwrotu. Dla kontrastu i punktu odniesienia, na wykresie znajduje się również wykres wartości z rozkładu normalnego o średniej i odchyleniu standardowym stóp zwrotu indeksu NYA)
+
+```{r, echo=FALSE, warning=FALSE}
+x<-cbind.data.frame(dane$NDX, dane$RUT, dane$NYA, rnorm(length(dane$NYA), 0, sd(dane$RUT)))
+names(x)<-c("NDX","RUT","NYA", "Norm Dist")
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data<- melt(x)
+```
+```{r, echo=FALSE, warning=FALSE}
+
+ggplot(data,aes(x=variable, y=value)) + geom_boxplot()+
+  ggtitle("Wartości stóp zwrotu")+ylab("Stopa zwrotu(%)")+ xlab("")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+Na wykresie widać przede wszystkim, że występuje bardzo dużo wartości odstających. Zdecydowanie za dużo jak na rozkład normalny, jednak wartości te są uzasadnione, gdyż rynkiem kieruje losowość. Mozna także zauwazyć, że wartości stóp zwrotu w przypadku każdego z indeksów są mocno skupione wokół średniej. 
+
+Lepiej widoczne jest to na wykresie gęstości:
+
+```{r, echo=FALSE, warning=FALSE}
+ggplot(data,aes(x=value, fill=variable)) + geom_density(alpha=0.25)+ggtitle("Rozkłady stóp zwrotu indeksów")+
+  theme(plot.title = element_text(hjust = 0.5), legend.title = element_text(hjust = 0.5))+
+  labs(color="Index")+xlab("Wartości")+ylab("Gęstość")
+```
+
+Na podstawie analizy graficznej moż odrzucić zgodności z niektórymi rozkładami teoretycznymi. Kandydatami na rozkłądy zgodne z rozkładem empirycznym są rozkłady t-Studenta z 1 i 2 stopniami swobody oraz rozkład LaPlace'a ze średnią m=0, oraz lambda = 1 lub 2, jako przykład rozkładu wykładniczego, z wysokim pikiem wokół średniej.
+
+W tabeli poniżej zawarto wartości p dla testów zgodności z powyżej wymienionymi rozkładami. W przypadku badania zgodności z rozkładem normalnym, zastosowany został tes Shapiro-Wilka, a w przypadku zgodności z rozkładami t-Studenta i LaPlace'a test Kołmogorowa-Smirnowa
+
+```{r, echo=FALSE, warning=FALSE, out.height="50%", fig.height=2}
+wyniki<-data.frame(row.names=c("Normalny", "t-Studenta k = 1","t-Studenta k = 2","Lambda m=0, k=1", "Lambda m=0, k=2"))
+wyniki$NDX<-NA
+wyniki$RUT<-NA
+wyniki$NYA<-NA
+
+
+wyniki[1,1]<-shapiro.test(dane$NDX)$p.value
+wyniki[2,1]<-ks.test(dane$NDX,rt(length(dane$NDX), 1))$p.value
+wyniki[3,1]<-ks.test(dane$NDX,rt(length(dane$NDX), 2))$p.value
+wyniki[4,1]<-ks.test(dane$NDX,rLaplace(length(dane$NDX),0,1))$p.value
+wyniki[5,1]<-ks.test(dane$NDX,rLaplace(length(dane$NDX),0,2))$p.value
+
+wyniki[1,2]<-shapiro.test(dane$RUT)$p.value
+wyniki[2,2]<-ks.test(dane$RUT,rt(length(dane$RUT), 1))$p.value
+wyniki[3,2]<-ks.test(dane$RUT,rt(length(dane$RUT), 2))$p.value
+wyniki[4,2]<-ks.test(dane$RUT,rLaplace(length(dane$RUT),0,1))$p.value
+wyniki[5,2]<-ks.test(dane$RUT,rLaplace(length(dane$RUT),0,2))$p.value
+
+wyniki[1,3]<-shapiro.test(dane$NYA)$p.value
+wyniki[2,3]<-ks.test(dane$NYA,rt(length(dane$NYA), 1))$p.value
+wyniki[3,3]<-ks.test(dane$NYA,rt(length(dane$NYA), 2))$p.value
+wyniki[4,3]<-ks.test(dane$NYA,rLaplace(length(dane$NYA),0,1))$p.value
+wyniki[5,3]<-ks.test(dane$NYA,rLaplace(length(dane$NYA),0,2))$p.value
+wyniki<-round(wyniki,2)
+
+wyniki$Test<- as.data.frame(c("Normalny", "t-Studenta k = 1","t-Studenta k = 2","LaPlace m=0, k=1", "LaPlace m=0, k=2"))
+
+names(wyniki)<-c("NDX","RUT","NYA","Zgodność z rozkładem")
+wyniki<-wyniki[c("Zgodność z rozkładem","NDX","RUT","NYA")]
+table <- ggtexttable(wyniki, rows = NULL, 
+                        theme = ttheme("mBlue"))
+table
+
+```
+Na podstawie wyników powyższych testów, można powiedzieć, że na poziomie istotności 5%, nie ma podstaw aby sądzić, że dzienne stopy zwrotu dowolnego z badanych indeksów na przestrzeni lat 2006-2021, mają którykolwiek z wymienionych rozkładów teoretycznych.
+
+
+## Korelacje i autokorelacje
+
+
+
+```{r,echo=FALSE,warning=FALSE}
+q4<-ggcorrplot(cor(dane[,-1]),lab = T)+labs(color="korelacja")
+
+a1<-acf(dane$NDX, plot = F)
+acf1<-with(a1, data.frame(lag, acf))
+
+a2<-acf(dane$RUT, plot = F)
+acf2<-with(a2, data.frame(lag, acf))
+
+a3<-acf(dane$NYA, plot = F)
+acf3<-with(a3, data.frame(lag, acf))
+
+q1 <- ggplot(data = acf1, mapping = aes(x = lag, y = acf)) +
+  geom_hline(aes(yintercept = 0)) +
+       geom_hline(aes(yintercept = 0.05),linetype = "longdash",colour="blue") +
+          geom_hline(aes(yintercept = -0.05),linetype = "longdash", colour="blue") +
+          geom_segment(mapping = aes(xend = lag, yend = 0))+
+  ggtitle("Autokorelacje NDX")+xlab("Opóźnienie")+ylab("Autokorelacja")
+q2 <- ggplot(data = acf2, mapping = aes(x = lag, y = acf)) +
+  geom_hline(aes(yintercept = 0)) +
+       geom_hline(aes(yintercept = 0.05),linetype = "longdash",colour="blue") +
+          geom_hline(aes(yintercept = -0.05),linetype = "longdash", colour="blue") +
+          geom_segment(mapping = aes(xend = lag, yend = 0))+
+  ggtitle("Autokorelacje RUT")+xlab("Opóźnienie")+ylab("Autokorelacja")
+q3 <- ggplot(data = acf3, mapping = aes(x = lag, y = acf)) +
+       geom_hline(aes(yintercept = 0)) +
+        geom_hline(aes(yintercept = 0.05),linetype = "longdash",colour="blue") +
+          geom_hline(aes(yintercept = -0.05),linetype = "longdash", colour="blue") +
+          geom_segment(mapping = aes(xend = lag, yend = 0))+
+  ggtitle("Autokorelacje NYA")+xlab("Opóźnienie")+ylab("Autokorelacja")
+
+
+
+figure1 <- multi_panel_figure(columns = 2, rows = 2, panel_label_type = "none", width = 200)
+
+figure1 %<>%
+  fill_panel(q1, column = 1, row = 1) %<>%
+  fill_panel(q2, column = 2, row = 1) %<>%
+  fill_panel(q3, column = 1, row = 2) %<>%
+  fill_panel(q4, column = 2, row = 2)
+
+```
+
+Aby sprawdzić hipoteze postawioną we wstępie, należy policzyc współczynniki korelacji liniowej między wartościami stóp zwrotu.
+
+Do tego na wykresie zaprezentowano także autokorelacje.
+
+```{r,echo=FALSE,out.width="150%", warning=FALSE}
+figure1
+
+```
+
+Widać, że zgodnie z przypuszczeniami, między stopami zwrotu indeksów zachodzi silna korelacja. 
+
+Oprócz tego, widac, że każdy z badanych indeksów wykazuje istotną na poziomie 5%, autokorelacje 1 rzędu. Wartości autokorelacji są ujemne i niewielkie, co nakazuje sądzić, że z dnia na dzień można się spodziewać na zmianę stopy zwrotu ujemnej i dodatniej. Autokorelacja jednak jest niska, więc wniosek ten nie jest pewny.
+
+# Analiza ryzyka
+
+Po przebadaniu jakimi własnościami charakteryzują się stopy zwrotu dla badanych indeksów, można przejść do wyznaczania wartości VaR (wartości narażonej na ryzyko) oraz ES (warunkowej wartości narazonej na ryzyko).
+
+Wartości VaR i ES zostaną wyznaczone na poziomach 95% i 99%, przy użyciu 4 metod.
+
+* Metody historycznej
+
+* Metody historycznej z wagami
+
+* Metody symulacyjnej Monte Carlo
+
+* Metody uwzględniającej heteroskedastyczność - przy pomocy zmienności obliczonej modelem EWMA z parametrem lambda = 0.99
+
+## Wyznaczanie VaR i ES
+
+Przed wyznaczeniem wartości VaR i ES, warto pojrzeć, jak w czasie zmieniały się rozkłady stóp zwrotu indeksów w podziale na lata.
+
+Warto także zaznaczyć, że przy wyznaczaniu wartości VaR i ES przyjęto długość okna T=250.
+
+Ze względu na powyższe, pierwsza wartość VaR, wyznaczona jest więc na dzień 03/01/2007
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+dane$Year<- year(dane$Date)
+
+
+q5 <- ggplot(dane,
+    aes(x = NDX, y = Year, group = Year))+
+  geom_density_ridges_gradient(
+    scale=2, size = 0.4, rel_min_height = 0.03, calc_ecdf=TRUE) +
+  xlab("") + ylab("")+xlim(-5,5)+ggtitle("NDX")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+
+q6 <- ggplot(dane,
+    aes(x = RUT, y = Year, group = Year))+
+  geom_density_ridges_gradient(
+    scale=2, size = 0.4, rel_min_height = 0.03, calc_ecdf=TRUE) +
+  xlab("") + ylab("")+xlim(-5,5)+theme(
+  axis.text.y = element_blank())+ggtitle("RUT")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+
+q7 <- ggplot(dane,
+    aes(x = NYA, y = Year, group = Year))+
+  geom_density_ridges_gradient(
+    scale=2, size = 0.4, rel_min_height = 0.03, calc_ecdf=TRUE) +
+  xlab("") + ylab("")+xlim(-5,5)+theme(
+  axis.text.y = element_blank())+ggtitle("NDX")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+figure2 <- multi_panel_figure(columns = 3, rows = 1, panel_label_type = "none")
+
+figure2 %<>%
+  fill_panel(q5, column = 1, row = 1) %<>%
+  fill_panel(q6, column = 2, row = 1) %<>%
+  fill_panel(q7, column = 3, row = 1)
+
+```
+```{r, echo=FALSE, warning=FALSE}
+figure2
+```
+
+Na wykresie widać mniej więcej rówanież, że rozkłady z okresów kryzysów gospodarczych sa znacznie bardziej spłaszczone. Poza tym widać, że w latach bez kryzysów i krachów, rozkłady dziennych stóp zwrotu w podziale rocznym pozostają mniej więcej takie same.
+
+Na podstawie tych wykresów, spodziewamy się więc skoków VaR i ES w latach w których rozkłady zaczynaja być rozciągnięte, gdyz automatycznie najczarniejszy scenariusz będzie polem pod szerzej rozciągniętym i spłaszczonym końcem lewego ogonu rozkładu. Zatem spodziewamy się skoków VaR i ES wtedy, kiedy na świecie był kryzys gospodarczy.
+
+## VaR i ES 99%
+
+### Metoda symulacji historycznych
+
+```{r, echo=FALSE,warning=FALSE, warning=FALSE}
+
+dane.var <- data.frame(Data=dane$Date, 
+                          NDX=-dane$NDX,
+                          RUT=-dane$RUT,
+                          NYA=-dane$NYA)
+dane.var$var.hist.NDX <- NA
+dane.var$es.hist.NDX <- NA
+dane.var$var.hist.RUT <- NA
+dane.var$es.hist.RUT <- NA
+dane.var$var.hist.NYA <- NA
+dane.var$es.hist.NYA <- NA
+
+
+for (i in seq(1,nrow(dane.var)-250,1)){
+  f <- dane.var[i:(249+i),]
+  q99 <- quantile(f$NDX, 0.99, na.rm = T)
+  dane.var$var.hist.NDX[250+i] <- q99
+  
+  f2 <- f %>% filter(NDX > q99)
+  dane.var$es.hist.NDX[250+i] <- mean(f2$NDX)
+  
+  q99 <- quantile(f$RUT, 0.99, na.rm = T)
+  dane.var$var.hist.RUT[250+i] <- q99
+  
+  f2 <- f %>% filter(RUT > q99)
+  dane.var$es.hist.RUT[250+i] <- mean(f2$RUT)
+  
+  q99 <- quantile(f$NYA, 0.99, na.rm = T)
+  dane.var$var.hist.NYA[250+i] <- q99
+  
+  f2 <- f %>% filter(NYA > q99)
+  dane.var$es.hist.NYA[250+i] <- mean(f2$NYA)
+}
+
+plot1<-ggplot(dane.var, aes(x=Data))+
+  geom_line(aes(y=var.hist.NDX, colour="VaR NDX"))+
+  geom_line(aes(y=var.hist.RUT, colour="VaR RUT"))+
+  geom_line(aes(y=var.hist.NYA, colour="VaR NYA"))+
+  ylab("VaR / ES(%)")+
+  xlab("")+
+  ggtitle("Porównanie VaR dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(color="VaR 99%")
+
+
+
+
+
+plot2<-ggplot(dane.var, aes(x=Data))+
+  geom_line(aes(y=es.hist.NDX, colour="NDX"))+
+  geom_line(aes(y=es.hist.RUT, colour="RUT"))+
+  geom_line(aes(y=es.hist.NYA, colour="NYA"))+
+  ylab("")+
+  xlab("")+
+  ggtitle("Porównanie ES dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_text(hjust = 0.5))+
+  labs(color="VaR/ES 99%")
+
+
+legend<- get_legend(plot2)
+
+plot2<- plot2+ theme(legend.position = "none")
+
+```
+
+```{r, fig.width=9, fig.height=5, , echo=FALSE,warning=FALSE}
+figure3 <- multi_panel_figure(columns = 7, rows = 1, panel_label_type = "none")
+
+figure3 %<>%
+  fill_panel(plot1, column = 1:3, row = 1) %<>%
+  fill_panel(plot2, column = 4:6, row = 1) %<>%
+  fill_panel(legend, column = 7, row = 1)
+
+figure3
+
+```
+
+W przypadku metody historycznej, spodziewane skoki pojawiły się w odpowiednich momentach. W dodatku wartośći VaR i ES, są stosunkowo niskie, co nakazuje sądzić, że inwestowanie w powyższe indeksy, nie jest obarczone dużym ryzykiem, ani dużą strata kapitału. Dla 99% VaR, największą wartością było ponad 10% w roku 2020, wtedy też wartość ES wynosiła ponad 12.5% kapitału wkładowego.
+
+
+### Metoda symulacji historycznych z wagami
+
+```{r, echo=FALSE,warning=FALSE}
+
+dane.var$var.hist.wagi.NDX <- NA
+dane.var$es.hist.wagi.NDX <- NA
+dane.var$var.hist.wagi.RUT <- NA
+dane.var$es.hist.wagi.RUT <- NA
+dane.var$var.hist.wagi.NYA <- NA
+dane.var$es.hist.wagi.NYA <- NA
+
+probs<- rep(0,250)
+q=.995
+
+for(i in seq(1,250,1)){
+  probs[i]<- (q**(250-i)*(1-q))/(1-q**250)
+}
+probs1<-as.data.frame(probs)
+
+
+
+for (i in seq(1,nrow(dane.var)-250,1)){
+  f <- dane.var[i:(249+i),]
+  q99 <- quantile.density(density(f$NDX, weights = probs), .99)
+  dane.var$var.hist.wagi.NDX[250+i] <- q99
+  
+  f2 <- f %>% filter(NDX > q99)
+  dane.var$es.hist.wagi.NDX[250+i] <- mean(f2$NDX)
+  
+  q99 <- quantile.density(density(f$RUT, weights = probs), .99)
+  dane.var$var.hist.wagi.RUT[250+i] <- q99
+  
+  f2 <- f %>% filter(RUT > q99)
+  dane.var$es.hist.wagi.RUT[250+i] <- mean(f2$RUT)
+  
+  q99 <- quantile.density(density(f$NYA, weights = probs), .99)
+  dane.var$var.hist.wagi.NYA[250+i] <- q99
+  
+  f2 <- f %>% filter(NYA > q99)
+  dane.var$es.hist.wagi.NYA[250+i] <- mean(f2$NYA)
+}
+
+plot1<-ggplot(dane.var, aes(x=Data))+
+  geom_line(aes(y=var.hist.wagi.NDX, colour="VaR NDX"))+
+  geom_line(aes(y=var.hist.wagi.RUT, colour="VaR RUT"))+
+  geom_line(aes(y=var.hist.wagi.NYA, colour="VaR NYA"))+
+  ylab("VaR / ES(%)")+
+  xlab("")+
+  ggtitle("Porównanie VaR dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(color="VaR 99%")
+
+
+
+
+
+plot2<-ggplot(dane.var, aes(x=Data))+
+  geom_line(aes(y=es.hist.wagi.NDX, colour="NDX"))+
+  geom_line(aes(y=es.hist.wagi.RUT, colour="RUT"))+
+  geom_line(aes(y=es.hist.wagi.NYA, colour="NYA"))+
+  ylab("")+
+  xlab("")+
+  ggtitle("Porównanie ES dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_text(hjust = 0.5))+
+  labs(color="VaR / ES 99%")
+
+
+legend<- get_legend(plot2)
+
+plot2<- plot2+ theme(legend.position = "none")
+
+```
+
+W przypadku zastosowania metody historycznej z uwzględnieniem wag, piki pojawiają się w tych samych miejscach jednak znacznie szybciej maleją.
+
+```{r, fig.width=9, fig.height=5, echo=FALSE,warning=FALSE}
+
+figure3 <- multi_panel_figure(columns = 7, rows = 1, panel_label_type = "none")
+
+figure3 %<>%
+  fill_panel(plot1, column = 1:3, row = 1) %<>%
+  fill_panel(plot2, column = 4:6, row = 1) %<>%
+  fill_panel(legend, column = 7, row = 1)
+
+figure3
+
+```
+
+
+
+
+### Metoda monte carlo
+
+Stosując metodę Monte Carlo, przyjmuję założenie o normalności rozkłądu stóp zwrotu. W związku z tym, że łącznie stopy zwrotu takiego rozkładu nie mają, można podejrzewać, że VaR i ES wyznaczone ta metodą nie będą wiarygodne.
+
+```{r, echo=FALSE,warning=FALSE}
+dane.var$var.MC.NDX <- NA
+dane.var$es.MC.NDX <- NA
+dane.var$var.MC.RUT <- NA
+dane.var$es.MC.RUT <- NA
+dane.var$var.MC.NYA <- NA
+dane.var$es.MC.NYA <- NA
+
+for (i in seq(1,nrow(dane.var)-250,1)){
+  f <- dane.var[i:(249+i),]
+  fake<- rnorm(1000,mean(f$NDX), sd(f$NDX))
+  q99<-quantile(fake, .99)
+  dane.var$var.MC.NDX[250+i] <- q99
+  
+  f2 <- f %>% filter(NDX > q99)
+  dane.var$es.MC.NDX[250+i] <- mean(f2$NDX)
+  
+  fake<- rnorm(1000,mean(f$RUT), sd(f$RUT))
+  q99<-quantile(fake, .99)
+  dane.var$var.MC.RUT[250+i] <- q99
+  
+  f2 <- f %>% filter(RUT > q99)
+  dane.var$es.MC.RUT[250+i] <- mean(f2$NDX)
+  
+  fake<- rnorm(1000,mean(f$NYA), sd(f$NYA))
+  q99<-quantile(fake, .99)
+  dane.var$var.MC.NYA[250+i] <- q99
+  
+  f2 <- f %>% filter(NYA > q99)
+  dane.var$es.MC.NYA[250+i] <- mean(f2$NYA)
+}
+
+plot1<-ggplot(dane.var, aes(x=Data))+
+  geom_line(aes(y=var.MC.NDX, colour="VaR NDX"))+
+  geom_line(aes(y=var.MC.RUT, colour="VaR RUT"))+
+  geom_line(aes(y=var.MC.NYA, colour="VaR NYA"))+
+  ylab("VaR / ES(%)")+
+  xlab("")+
+  ggtitle("Porównanie VaR dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(color="VaR 99%")
+
+
+
+
+
+plot2<-ggplot(dane.var, aes(x=Data))+
+  geom_line(aes(y=es.MC.NDX, colour="NDX"))+
+  geom_line(aes(y=es.MC.RUT, colour="RUT"))+
+  geom_line(aes(y=es.MC.NYA, colour="NYA"))+
+  ylab("")+
+  xlab("")+
+  ggtitle("Porównanie ES dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_text(hjust = 0.5))+
+  labs(color="VaR / ES 99%")
+
+
+legend<- get_legend(plot2)
+
+plot2<- plot2+ theme(legend.position = "none")
+
+```
+
+Na poniższym wykresie widac, że przez losowanie w każdym dniu nowego rozkładu, powstały wahania o wysokiej częstotliwości. Należy równiez zwrócić uwagę, że przez zastosowanie rozkładu normalnego, wartości VaR nie są daleko odległe od wartości ES, w przeciwieństwie do poprzednich metod. 
+
+Dzieje się tak ze względu na to, że w danych empirycznych występowało dużo wartości odstających, a w przypadku rozkładu normalnego, zgodnie z regułą 3 sigm, nie ma dużo wartości mocno odstających od średniej.
+
+```{r, fig.width=9, fig.height=5, echo=FALSE,warning=FALSE}
+
+figure3 <- multi_panel_figure(columns = 7, rows = 1, panel_label_type = "none")
+
+figure3 %<>%
+  fill_panel(plot1, column = 1:3, row = 1) %<>%
+  fill_panel(plot2, column = 4:6, row = 1) %<>%
+  fill_panel(legend, column = 7, row = 1)
+
+figure3
+
+```
+
+### Metoda EWMA
+
+```{r, echo=FALSE,warning=FALSE}
+dane.var$var.EWMA.NDX <- NA
+dane.var$es.EWMA.NDX <- NA
+dane.var$var.EWMA.RUT <- NA
+dane.var$es.EWMA.RUT <- NA
+dane.var$var.EWMA.NYA <- NA
+dane.var$es.EWMA.NYA <- NA
+
+for (i in seq(1,nrow(dane.var)-250,1)){
+  f <- dane.var[i:(249+i),]
+  f$vol<-EWMAvol(f$NDX, lambda=0.999)$Sigma.t
+  f<-f %>% mutate(Z = NDX * lead(vol)/vol)
+  q99<-quantile(f$Z, .99, na.rm = T)
+  dane.var$var.EWMA.NDX[250+i] <- q99
+
+  f2 <- f %>% filter(NDX > q99)
+  dane.var$es.EWMA.NDX[250+i] <- mean(f2$NDX)
+  
+  f$vol<-EWMAvol(f$RUT, lambda=0.999)$Sigma.t
+  f<-f %>% mutate(Z = RUT * lead(vol)/vol)
+  q99<-quantile(f$Z, .99, na.rm = T)
+  dane.var$var.EWMA.RUT[250+i] <- q99
+
+  f2 <- f %>% filter(RUT > q99)
+  dane.var$es.EWMA.RUT[250+i] <- mean(f2$RUT)
+  
+  f$vol<-EWMAvol(f$NYA, lambda=0.999)$Sigma.t
+  f<-f %>% mutate(Z = NYA * lead(vol)/vol)
+  q99<-quantile(f$Z, .99, na.rm = T)
+  dane.var$var.EWMA.NYA[250+i] <- q99
+
+  f2 <- f %>% filter(NYA > q99)
+  dane.var$es.EWMA.NYA[250+i] <- mean(f2$NYA)
+}
+
+
+plot1<-ggplot(dane.var, aes(x=Data))+
+  geom_line(aes(y=var.EWMA.NDX, colour="VaR NDX"))+
+  geom_line(aes(y=var.EWMA.RUT, colour="VaR RUT"))+
+  geom_line(aes(y=var.EWMA.NYA, colour="VaR NYA"))+
+  ylab("VaR / ES(%)")+
+  xlab("")+
+  ggtitle("Porównanie VaR dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(color="VaR 99%")
+
+
+
+
+
+plot2<-ggplot(dane.var, aes(x=Data))+
+  geom_line(aes(y=es.EWMA.NDX, colour="NDX"))+
+  geom_line(aes(y=es.EWMA.RUT, colour="RUT"))+
+  geom_line(aes(y=es.EWMA.NYA, colour="NYA"))+
+  ylab("")+
+  xlab("")+
+  ggtitle("Porównanie ES dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_text(hjust = 0.5))+
+  labs(color="VaR / ES 99%")
+
+
+legend<- get_legend(plot2)
+
+plot2<- plot2+ theme(legend.position = "none")
+
+```
+
+Przez zastosowanie wysokiej wartości lambda przy modelowaniu zmienności, model dłużej pamięta starsze obserwacje. powoduje to, że wykres VaR i ES upodabnia się do tego uzyskanego metoda historyczną.
+
+
+```{r, fig.width=9, fig.height=5, echo=FALSE,warning=FALSE}
+
+figure3 <- multi_panel_figure(columns = 7, rows = 1, panel_label_type = "none")
+
+figure3 %<>%
+  fill_panel(plot1, column = 1:3, row = 1) %<>%
+  fill_panel(plot2, column = 4:6, row = 1) %<>%
+  fill_panel(legend, column = 7, row = 1)
+
+figure3
+
+```
+
+### Porównanie uzyskanych wyników
+
+```{r,fig.width=9, fig.height=5, echo=FALSE,warning=FALSE}
+q1<- ggplot(dane.var, aes(Data))+
+  geom_line(aes(y=var.hist.NDX, colour="historyczna"))+
+  geom_line(aes(y=var.hist.wagi.NDX, colour="historyczna z wagami"))+
+  geom_line(aes(y=var.MC.NDX, colour="Monte Carlo"))+
+  geom_line(aes(y=var.EWMA.NDX, colour="EWMA"))+
+  ylab("VaR / ES(%)")+
+  xlab("")+
+  ggtitle("Porównanie VaR dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(color="VaR 99%")
+
+q2<- ggplot(dane.var, aes(Data))+
+  geom_line(aes(y=es.hist.NDX, colour="historyczna"))+
+  geom_line(aes(y=es.hist.wagi.NDX, colour="historyczna z wagami"))+
+  geom_line(aes(y=es.MC.NDX, colour="Monte Carlo"))+
+  geom_line(aes(y=es.EWMA.NDX, colour="EWMA"))+
+  ylab("")+
+  xlab("")+
+  ggtitle("Porównanie ES dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_text(hjust = 0.5))+
+  labs(color="VaR / ES 99%")
+
+
+legend<- get_legend(q2)
+
+figure3 <- multi_panel_figure(columns = 7, rows = 1, panel_label_type = "none")
+q2<- q2+ theme(legend.position = "none")
+
+figure3 %<>%
+  fill_panel(q1, column = 1:3, row = 1) %<>%
+  fill_panel(q2, column = 4:6, row = 1) %<>%
+  fill_panel(legend, column = 7, row = 1)
+
+figure3
+```
+
+Na powyższym wykresie można zobaczyć zestawienie wyników.
+
+Widać, że w zdecydowanej większości wykresy mniej lub bardziej się na siebie nakładają. Najwieksze różnice można zobaczyć przy pikach. Zdecydowanie najwyżej rosną wartości VaR i ES uzyskane metoda historyczną z wagami.
+
+Spadaja one jednak zdecydowanie szybciej niż VaR i ES obliczony pozostałymi metodami.
+
+
+```{r, fig.width=15, echo=FALSE,warning=FALSE}
+x<-cbind.data.frame(dane.var$var.hist.NDX, dane.var$var.hist.wagi.NDX, dane.var$var.MC.NDX, dane.var$var.EWMA.NDX)
+names(x)<-c("Historyczna","Historyczna z wagami","Monte Carlo", "EWMA")
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data<- melt(x)
+```
+```{r, fig.width=15, echo=FALSE,warning=FALSE}
+data$T<-"VaR"
+x<-cbind.data.frame(dane.var$es.hist.NDX, dane.var$es.hist.wagi.NDX, dane.var$es.MC.NDX, dane.var$es.EWMA.NDX)
+names(x)<-c("Historyczna","Historyczna z wagami","Monte Carlo", "EWMA")
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data2<- melt(x)
+```
+```{r, fig.width=15, echo=FALSE,warning=FALSE}
+data2$T<-"ES"
+
+data<-rbind.data.frame(data,data2)
+
+
+q1<-ggplot(data,aes(x=variable, y=value, fill=T)) + geom_boxplot()+
+  ggtitle("NDX")+ylab("VaR / ES(%)")+ xlab("")+
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.title =  element_text(hjust = 0.5))+
+  labs(color="VaR/ES")
+
+
+
+x<-cbind.data.frame(dane.var$var.hist.RUT, dane.var$var.hist.wagi.RUT, dane.var$var.MC.RUT, dane.var$var.EWMA.RUT)
+names(x)<-c("Historyczna","Historyczna z wagami","Monte Carlo", "EWMA")
+
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data<- melt(x)
+```
+```{r, fig.width=15, echo=FALSE,warning=FALSE}
+data$T<-"VaR"
+x<-cbind.data.frame(dane.var$es.hist.RUT, dane.var$es.hist.wagi.RUT, dane.var$es.MC.RUT, dane.var$es.EWMA.RUT)
+names(x)<-c("Historyczna","Historyczna z wagami","Monte Carlo", "EWMA")
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data2<- melt(x)
+```
+```{r, fig.width=15, echo=FALSE,warning=FALSE}
+data2$T<-"ES"
+
+data<-rbind.data.frame(data,data2)
+
+
+q2<-ggplot(data,aes(x=variable, y=value, fill=T)) + geom_boxplot()+
+  ggtitle("RUT")+ylab("VaR / ES(%)")+ xlab("")+
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.title =  element_text(hjust = 0.5))+
+  labs(color="VaR/ES")
+
+x<-cbind.data.frame(dane.var$var.hist.NYA, dane.var$var.hist.wagi.NYA, dane.var$var.MC.NYA, dane.var$var.EWMA.NYA)
+names(x)<-c("Historyczna","Historyczna z wagami","Monte Carlo", "EWMA")
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data<- melt(x)
+```
+```{r, fig.width=15, echo=FALSE,warning=FALSE}
+data$T<-"VaR"
+x<-cbind.data.frame(dane.var$es.hist.NYA, dane.var$es.hist.wagi.NYA, dane.var$es.MC.NYA, dane.var$es.EWMA.NYA)
+names(x)<-c("Historyczna","Historyczna z wagami","Monte Carlo", "EWMA")
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data2<- melt(x)
+```
+```{r, echo=FALSE,warning=FALSE}
+data2$T<-"ES"
+
+data<-rbind.data.frame(data,data2)
+
+
+q3<-ggplot(data,aes(x=variable, y=value, fill=T)) + geom_boxplot()+
+  ggtitle("NYA")+ylab("VaR / ES(%)")+ xlab("")+
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.title =  element_text(hjust = 0.5))+
+  labs(color="VaR/ES")
+
+```
+
+Na poniższych wykresach z kolei można zobaczyć, jak wyglądają wartości VaR i ES dla poziomu 99% w podziale na indeks i metody
+
+```{r, echo=FALSE,warning=FALSE}
+q1
+```
+```{r, echo=FALSE,warning=FALSE}
+q2
+```
+```{r, echo=FALSE,warning=FALSE}
+q3
+```
+
+Na wykresach widac między innymi, ze właśnie metoda historyczna z wagami daje najwyższe wartości 99% VaR i ES w przypadku każdego indeksu.
+
+Z kolei metoda monte Carlo daje zdecydowanie najniżne wartości ES i VaR ze względu na jej wahania.
+
+Warto zwrócic też uwage na wspomnianą wcześniej własciwość - wartości uzyskane metodami z użyciem EWMA oraz historyczną, wykazują co do zasady praktycznie takie same wartości. 
+
+Widać także, że średnie wartości VaR, dla każdego indeksu utrzymują się poniżej wartości 5%. Dla indeksu NYA, średnia wartość 99% vaR to tylko około 2.5%, co uwzględniając jedynie VaR i ES, czyni go to najbezpieczniejszą inwestycją z powyższych indeksów. 
+
+## VaR i ES 95%
+
+Poniżej przedstawione zostaną wartości VaR i ES obliczone tymi samymi metodami co powyżej, ale tym razem dla poziomu 95%
+
+### Metoda symulacji historycznych
+
+```{r, echo=FALSE,warning=FALSE, warning=FALSE}
+
+dane.var2 <- data.frame(Data=dane$Date, 
+                          NDX=-dane$NDX,
+                          RUT=-dane$RUT,
+                          NYA=-dane$NYA)
+dane.var2$var.hist.NDX <- NA
+dane.var2$es.hist.NDX <- NA
+dane.var2$var.hist.RUT <- NA
+dane.var2$es.hist.RUT <- NA
+dane.var2$var.hist.NYA <- NA
+dane.var2$es.hist.NYA <- NA
+
+
+for (i in seq(1,nrow(dane.var2)-250,1)){
+  f <- dane.var2[i:(249+i),]
+  q95 <- quantile(f$NDX, 0.95, na.rm = T)
+  dane.var2$var.hist.NDX[250+i] <- q95
+  
+  f2 <- f %>% filter(NDX > q95)
+  dane.var2$es.hist.NDX[250+i] <- mean(f2$NDX)
+  
+  q95 <- quantile(f$RUT, 0.95, na.rm = T)
+  dane.var2$var.hist.RUT[250+i] <- q95
+  
+  f2 <- f %>% filter(RUT > q95)
+  dane.var2$es.hist.RUT[250+i] <- mean(f2$RUT)
+  
+  q95 <- quantile(f$NYA, 0.95, na.rm = T)
+  dane.var2$var.hist.NYA[250+i] <- q95
+  
+  f2 <- f %>% filter(NYA > q95)
+  dane.var2$es.hist.NYA[250+i] <- mean(f2$NYA)
+}
+
+plot1<-ggplot(dane.var2, aes(x=Data))+
+  geom_line(aes(y=var.hist.NDX, colour="VaR NDX"))+
+  geom_line(aes(y=var.hist.RUT, colour="VaR RUT"))+
+  geom_line(aes(y=var.hist.NYA, colour="VaR NYA"))+
+  ylab("VaR / ES(%)")+
+  xlab("")+
+  ggtitle("Porównanie VaR dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(color="VaR 95%")
+
+
+
+
+
+plot2<-ggplot(dane.var2, aes(x=Data))+
+  geom_line(aes(y=es.hist.NDX, colour="NDX"))+
+  geom_line(aes(y=es.hist.RUT, colour="RUT"))+
+  geom_line(aes(y=es.hist.NYA, colour="NYA"))+
+  ylab("")+
+  xlab("")+
+  ggtitle("Porównanie ES dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_text(hjust = 0.5))+
+  labs(color="VaR/ES 95%")
+
+
+legend<- get_legend(plot2)
+
+plot2<- plot2+ theme(legend.position = "none")
+
+```
+
+```{r, fig.width=9, fig.height=5, , echo=FALSE,warning=FALSE}
+figure3 <- multi_panel_figure(columns = 7, rows = 1, panel_label_type = "none")
+
+figure3 %<>%
+  fill_panel(plot1, column = 1:3, row = 1) %<>%
+  fill_panel(plot2, column = 4:6, row = 1) %<>%
+  fill_panel(legend, column = 7, row = 1)
+
+figure3
+
+```
+
+Oczywistym i spodziewanym rezultatem obniżenia wartości VaR z 99% do 95% jest zmniejszenie wartości osiąganych przez VaR i ES. Wizualnie jednak wykresy pozostają w tym samym kształcie, a piki są w tych samych miejscach co w przypadku VaR i ES 99%.
+
+Poniżej pozostałe metody.
+
+### Metoda symulacji historycznych z wagami
+
+```{r, echo=FALSE,warning=FALSE}
+
+dane.var2$var.hist.wagi.NDX <- NA
+dane.var2$es.hist.wagi.NDX <- NA
+dane.var2$var.hist.wagi.RUT <- NA
+dane.var2$es.hist.wagi.RUT <- NA
+dane.var2$var.hist.wagi.NYA <- NA
+dane.var2$es.hist.wagi.NYA <- NA
+
+probs<- rep(0,250)
+q=.995
+
+for(i in seq(1,250,1)){
+  probs[i]<- (q**(250-i)*(1-q))/(1-q**250)
+}
+probs1<-as.data.frame(probs)
+
+
+
+for (i in seq(1,nrow(dane.var2)-250,1)){
+  f <- dane.var2[i:(249+i),]
+  q95 <- quantile.density(density(f$NDX, weights = probs), .95)
+  dane.var2$var.hist.wagi.NDX[250+i] <- q95
+  
+  f2 <- f %>% filter(NDX > q95)
+  dane.var2$es.hist.wagi.NDX[250+i] <- mean(f2$NDX)
+  
+  q95 <- quantile.density(density(f$RUT, weights = probs), .95)
+  dane.var2$var.hist.wagi.RUT[250+i] <- q95
+  
+  f2 <- f %>% filter(RUT > q95)
+  dane.var2$es.hist.wagi.RUT[250+i] <- mean(f2$RUT)
+  
+  q95 <- quantile.density(density(f$NYA, weights = probs), .95)
+  dane.var2$var.hist.wagi.NYA[250+i] <- q95
+  
+  f2 <- f %>% filter(NYA > q95)
+  dane.var2$es.hist.wagi.NYA[250+i] <- mean(f2$NYA)
+}
+
+plot1<-ggplot(dane.var2, aes(x=Data))+
+  geom_line(aes(y=var.hist.wagi.NDX, colour="VaR NDX"))+
+  geom_line(aes(y=var.hist.wagi.RUT, colour="VaR RUT"))+
+  geom_line(aes(y=var.hist.wagi.NYA, colour="VaR NYA"))+
+  ylab("VaR / ES(%)")+
+  xlab("")+
+  ggtitle("Porównanie VaR dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(color="VaR 95%")
+
+
+
+
+
+plot2<-ggplot(dane.var2, aes(x=Data))+
+  geom_line(aes(y=es.hist.wagi.NDX, colour="NDX"))+
+  geom_line(aes(y=es.hist.wagi.RUT, colour="RUT"))+
+  geom_line(aes(y=es.hist.wagi.NYA, colour="NYA"))+
+  ylab("")+
+  xlab("")+
+  ggtitle("Porównanie ES dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_text(hjust = 0.5))+
+  labs(color="VaR / ES 95%")
+
+
+legend<- get_legend(plot2)
+
+plot2<- plot2+ theme(legend.position = "none")
+
+```
+
+
+
+```{r, fig.width=9, fig.height=5, echo=FALSE,warning=FALSE}
+
+figure3 <- multi_panel_figure(columns = 7, rows = 1, panel_label_type = "none")
+
+figure3 %<>%
+  fill_panel(plot1, column = 1:3, row = 1) %<>%
+  fill_panel(plot2, column = 4:6, row = 1) %<>%
+  fill_panel(legend, column = 7, row = 1)
+
+figure3
+
+```
+
+
+### Metoda monte carlo
+
+Stosując metodę Monte Carlo, przyjmuję założenie o normalności rozkłądu stóp zwrotu. W związku z tym, że łącznie stopy zwrotu takiego rozkładu nie mają, można podejrzewać, że VaR i ES wyznaczone ta metodą nie będą wiarygodne.
+
+```{r, echo=FALSE,warning=FALSE}
+dane.var2$var.MC.NDX <- NA
+dane.var2$es.MC.NDX <- NA
+dane.var2$var.MC.RUT <- NA
+dane.var2$es.MC.RUT <- NA
+dane.var2$var.MC.NYA <- NA
+dane.var2$es.MC.NYA <- NA
+
+for (i in seq(1,nrow(dane.var2)-250,1)){
+  f <- dane.var2[i:(249+i),]
+  fake<- rnorm(1000,mean(f$NDX), sd(f$NDX))
+  q95<-quantile(fake, .95)
+  dane.var2$var.MC.NDX[250+i] <- q95
+  
+  f2 <- f %>% filter(NDX > q95)
+  dane.var2$es.MC.NDX[250+i] <- mean(f2$NDX)
+  
+  fake<- rnorm(1000,mean(f$RUT), sd(f$RUT))
+  q95<-quantile(fake, .95)
+  dane.var2$var.MC.RUT[250+i] <- q95
+  
+  f2 <- f %>% filter(RUT > q95)
+  dane.var2$es.MC.RUT[250+i] <- mean(f2$NDX)
+  
+  fake<- rnorm(1000,mean(f$NYA), sd(f$NYA))
+  q95<-quantile(fake, .95)
+  dane.var2$var.MC.NYA[250+i] <- q95
+  
+  f2 <- f %>% filter(NYA > q95)
+  dane.var2$es.MC.NYA[250+i] <- mean(f2$NYA)
+}
+
+plot1<-ggplot(dane.var2, aes(x=Data))+
+  geom_line(aes(y=var.MC.NDX, colour="VaR NDX"))+
+  geom_line(aes(y=var.MC.RUT, colour="VaR RUT"))+
+  geom_line(aes(y=var.MC.NYA, colour="VaR NYA"))+
+  ylab("VaR / ES(%)")+
+  xlab("")+
+  ggtitle("Porównanie VaR dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(color="VaR 95%")
+
+
+
+
+
+plot2<-ggplot(dane.var2, aes(x=Data))+
+  geom_line(aes(y=es.MC.NDX, colour="NDX"))+
+  geom_line(aes(y=es.MC.RUT, colour="RUT"))+
+  geom_line(aes(y=es.MC.NYA, colour="NYA"))+
+  ylab("")+
+  xlab("")+
+  ggtitle("Porównanie ES dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_text(hjust = 0.5))+
+  labs(color="VaR / ES 95%")
+
+
+legend<- get_legend(plot2)
+
+plot2<- plot2+ theme(legend.position = "none")
+
+```
+
+
+```{r, fig.width=9, fig.height=5, echo=FALSE,warning=FALSE}
+
+figure3 <- multi_panel_figure(columns = 7, rows = 1, panel_label_type = "none")
+
+figure3 %<>%
+  fill_panel(plot1, column = 1:3, row = 1) %<>%
+  fill_panel(plot2, column = 4:6, row = 1) %<>%
+  fill_panel(legend, column = 7, row = 1)
+
+figure3
+
+```
+
+### Metoda EWMA
+
+```{r, echo=FALSE,warning=FALSE}
+dane.var2$var.EWMA.NDX <- NA
+dane.var2$es.EWMA.NDX <- NA
+dane.var2$var.EWMA.RUT <- NA
+dane.var2$es.EWMA.RUT <- NA
+dane.var2$var.EWMA.NYA <- NA
+dane.var2$es.EWMA.NYA <- NA
+
+for (i in seq(1,nrow(dane.var2)-250,1)){
+  f <- dane.var2[i:(249+i),]
+  f$vol<-EWMAvol(f$NDX, lambda=0.959)$Sigma.t
+  f<-f %>% mutate(Z = NDX * lead(vol)/vol)
+  q95<-quantile(f$Z, .95, na.rm = T)
+  dane.var2$var.EWMA.NDX[250+i] <- q95
+
+  f2 <- f %>% filter(NDX > q95)
+  dane.var2$es.EWMA.NDX[250+i] <- mean(f2$NDX)
+  
+  f$vol<-EWMAvol(f$RUT, lambda=0.959)$Sigma.t
+  f<-f %>% mutate(Z = RUT * lead(vol)/vol)
+  q95<-quantile(f$Z, .95, na.rm = T)
+  dane.var2$var.EWMA.RUT[250+i] <- q95
+
+  f2 <- f %>% filter(RUT > q95)
+  dane.var2$es.EWMA.RUT[250+i] <- mean(f2$RUT)
+  
+  f$vol<-EWMAvol(f$NYA, lambda=0.959)$Sigma.t
+  f<-f %>% mutate(Z = NYA * lead(vol)/vol)
+  q95<-quantile(f$Z, .95, na.rm = T)
+  dane.var2$var.EWMA.NYA[250+i] <- q95
+
+  f2 <- f %>% filter(NYA > q95)
+  dane.var2$es.EWMA.NYA[250+i] <- mean(f2$NYA)
+}
+
+
+plot1<-ggplot(dane.var2, aes(x=Data))+
+  geom_line(aes(y=var.EWMA.NDX, colour="VaR NDX"))+
+  geom_line(aes(y=var.EWMA.RUT, colour="VaR RUT"))+
+  geom_line(aes(y=var.EWMA.NYA, colour="VaR NYA"))+
+  ylab("VaR / ES(%)")+
+  xlab("")+
+  ggtitle("Porównanie VaR dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(color="VaR 95%")
+
+
+
+
+
+plot2<-ggplot(dane.var2, aes(x=Data))+
+  geom_line(aes(y=es.EWMA.NDX, colour="NDX"))+
+  geom_line(aes(y=es.EWMA.RUT, colour="RUT"))+
+  geom_line(aes(y=es.EWMA.NYA, colour="NYA"))+
+  ylab("")+
+  xlab("")+
+  ggtitle("Porównanie ES dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_text(hjust = 0.5))+
+  labs(color="VaR / ES 95%")
+
+
+legend<- get_legend(plot2)
+
+plot2<- plot2+ theme(legend.position = "none")
+
+```
+
+
+```{r, fig.width=9, fig.height=5, echo=FALSE,warning=FALSE}
+
+figure3 <- multi_panel_figure(columns = 7, rows = 1, panel_label_type = "none")
+
+figure3 %<>%
+  fill_panel(plot1, column = 1:3, row = 1) %<>%
+  fill_panel(plot2, column = 4:6, row = 1) %<>%
+  fill_panel(legend, column = 7, row = 1)
+
+figure3
+
+```
+
+### Porównanie uzyskanych wyników
+
+```{r,fig.width=9, fig.height=5, echo=FALSE,warning=FALSE}
+q1<- ggplot(dane.var2, aes(Data))+
+  geom_line(aes(y=var.hist.NDX, colour="historyczna"))+
+  geom_line(aes(y=var.hist.wagi.NDX, colour="historyczna z wagami"))+
+  geom_line(aes(y=var.MC.NDX, colour="Monte Carlo"))+
+  geom_line(aes(y=var.EWMA.NDX, colour="EWMA"))+
+  ylab("VaR / ES(%)")+
+  xlab("")+
+  ggtitle("Porównanie VaR dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(color="VaR 95%")
+
+q2<- ggplot(dane.var2, aes(Data))+
+  geom_line(aes(y=es.hist.NDX, colour="historyczna"))+
+  geom_line(aes(y=es.hist.wagi.NDX, colour="historyczna z wagami"))+
+  geom_line(aes(y=es.MC.NDX, colour="Monte Carlo"))+
+  geom_line(aes(y=es.EWMA.NDX, colour="EWMA"))+
+  ylab("")+
+  xlab("")+
+  ggtitle("Porównanie ES dla indeksów w czasie")+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.title = element_text(hjust = 0.5))+
+  labs(color="VaR / ES 95%")
+
+
+legend<- get_legend(q2)
+
+figure3 <- multi_panel_figure(columns = 7, rows = 1, panel_label_type = "none")
+q2<- q2+ theme(legend.position = "none")
+
+figure3 %<>%
+  fill_panel(q1, column = 1:3, row = 1) %<>%
+  fill_panel(q2, column = 4:6, row = 1) %<>%
+  fill_panel(legend, column = 7, row = 1)
+
+figure3
+```
+
+
+```{r, fig.width=15, echo=FALSE,warning=FALSE}
+x<-cbind.data.frame(dane.var2$var.hist.NDX, dane.var2$var.hist.wagi.NDX, dane.var2$var.MC.NDX, dane.var2$var.EWMA.NDX)
+names(x)<-c("Historyczna","Historyczna z wagami","Monte Carlo", "EWMA")
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data<- melt(x)
+```
+```{r, fig.width=15, echo=FALSE,warning=FALSE}
+data$T<-"VaR"
+x<-cbind.data.frame(dane.var2$es.hist.NDX, dane.var2$es.hist.wagi.NDX, dane.var2$es.MC.NDX, dane.var2$es.EWMA.NDX)
+names(x)<-c("Historyczna","Historyczna z wagami","Monte Carlo", "EWMA")
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data2<- melt(x)
+```
+```{r, fig.width=15, echo=FALSE,warning=FALSE}
+data2$T<-"ES"
+
+data<-rbind.data.frame(data,data2)
+
+
+q1<-ggplot(data,aes(x=variable, y=value, fill=T)) + geom_boxplot()+
+  ggtitle("NDX")+ylab("VaR / ES(%)")+ xlab("")+
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.title =  element_text(hjust = 0.5))+
+  labs(color="VaR/ES")
+
+
+
+x<-cbind.data.frame(dane.var2$var.hist.RUT, dane.var2$var.hist.wagi.RUT, dane.var2$var.MC.RUT, dane.var2$var.EWMA.RUT)
+names(x)<-c("Historyczna","Historyczna z wagami","Monte Carlo", "EWMA")
+
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data<- melt(x)
+```
+```{r, fig.width=15, echo=FALSE,warning=FALSE}
+data$T<-"VaR"
+x<-cbind.data.frame(dane.var2$es.hist.RUT, dane.var2$es.hist.wagi.RUT, dane.var2$es.MC.RUT, dane.var2$es.EWMA.RUT)
+names(x)<-c("Historyczna","Historyczna z wagami","Monte Carlo", "EWMA")
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data2<- melt(x)
+```
+```{r, fig.width=15, echo=FALSE,warning=FALSE}
+data2$T<-"ES"
+
+data<-rbind.data.frame(data,data2)
+
+
+q2<-ggplot(data,aes(x=variable, y=value, fill=T)) + geom_boxplot()+
+  ggtitle("RUT")+ylab("VaR / ES(%)")+ xlab("")+
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.title =  element_text(hjust = 0.5))+
+  labs(color="VaR/ES")
+
+x<-cbind.data.frame(dane.var2$var.hist.NYA, dane.var2$var.hist.wagi.NYA, dane.var2$var.MC.NYA, dane.var2$var.EWMA.NYA)
+names(x)<-c("Historyczna","Historyczna z wagami","Monte Carlo", "EWMA")
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data<- melt(x)
+```
+```{r, fig.width=15, echo=FALSE,warning=FALSE}
+data$T<-"VaR"
+x<-cbind.data.frame(dane.var2$es.hist.NYA, dane.var2$es.hist.wagi.NYA, dane.var2$es.MC.NYA, dane.var2$es.EWMA.NYA)
+names(x)<-c("Historyczna","Historyczna z wagami","Monte Carlo", "EWMA")
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data2<- melt(x)
+```
+```{r, echo=FALSE,warning=FALSE}
+data2$T<-"ES"
+
+data<-rbind.data.frame(data,data2)
+
+
+q3<-ggplot(data,aes(x=variable, y=value, fill=T)) + geom_boxplot()+
+  ggtitle("NYA")+ylab("VaR / ES(%)")+ xlab("")+
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.title =  element_text(hjust = 0.5))+
+  labs(color="VaR/ES")
+
+```
+
+
+```{r, echo=FALSE,warning=FALSE}
+q1
+```
+```{r, echo=FALSE,warning=FALSE}
+q2
+```
+```{r, echo=FALSE,warning=FALSE}
+q3
+```
+
+Na powyższych wykresach widać, że wartości VaR i ES 95% mają te same własności co VaR i ES 99%, różnia się jedynie zakresem osiąganych wartości.
+
+Wartości z kolei, naturalnie są niższe przez obniżenie poziomu VaR i ES.
+Pozostałe wnioski pozostają takie same.
+
+
+
+## Testy wsteczne
+
+W celu sprawddzenia, jak dokładnie obliczone wartości VaR wpisują się w wartości rzeczywiste, wykonane zostaną 3 testy wsteczne:
+
+* Test Kupca - sprawdzający poprawność VaR
+
+* Test DQ - sprawdzający poprawność VaR
+
+* Test Christoffesena - test niezależności przekroczeń VaR w czasie
+
+W tabelach poniżej zawarte zostały wartości procentowe akceptacji hipotez zerowych w odpowiednich testach.
+
+### VaR 99%
+
+
+```{r, echo=FALSE, out.height="50%", fig.height=2}
+wynikiNDX<-data.frame(row.names=c("Historyczna", "Historyczna z wagami","Monte Carlo","EWMA"))
+wynikiNDX$Kupiec<-NA
+wynikiNDX$Christoffesen<-NA
+wynikiNDX$Dynamiczny<-NA
+przyjete.kupiec.hist<-0
+przyjete.ch.hist<-0
+przyjete.dq.hist<-0
+przyjete.kupiec.hist.wagi<-0
+przyjete.ch.hist.wagi<-0
+przyjete.dq.hist.wagi<-0
+przyjete.kupiec.mc<-0
+przyjete.ch.mc<-0
+przyjete.dq.mc<-0
+przyjete.kupiec.ewma<-0
+przyjete.ch.ewma<-0
+przyjete.dq.ewma<-0
+
+for (i in seq(1,nrow(dane.var2)-250,1)){
+przyjete.kupiec.hist<-przyjete.kupiec.hist+ifelse(BacktestVaR(dane.var$NDX[i:(249+i)], rep(dane.var$var.hist.NDX[i+250],250), alpha = 0.99)$LRuc[2]>0.05,1,0)
+przyjete.ch.hist<-przyjete.ch.hist+ifelse(BacktestVaR(dane.var$NDX[i:(249+i)], rep(dane.var$var.hist.NDX[i+250],250), alpha = 0.99)$LRcc[2]>0.05,1,0)
+przyjete.dq.hist<-przyjete.dq.hist+ifelse(BacktestVaR(dane.var$NDX[i:(249+i)], rep(dane.var$var.hist.NDX[i+250],250), alpha = 0.99)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.hist.wagi<-przyjete.kupiec.hist.wagi+ifelse(BacktestVaR(dane.var$NDX[i:(249+i)], rep(dane.var$var.hist.wagi.NDX[i+250],250), alpha = 0.99)$LRuc[2]>0.05,1,0)
+przyjete.ch.hist.wagi<-przyjete.ch.hist.wagi+ifelse(BacktestVaR(dane.var$NDX[i:(249+i)], rep(dane.var$var.hist.wagi.NDX[i+250],250), alpha = 0.99)$LRcc[2]>0.05,1,0)
+przyjete.dq.hist.wagi<-przyjete.dq.hist.wagi+ifelse(BacktestVaR(dane.var$NDX[i:(249+i)], rep(dane.var$var.hist.wagi.NDX[i+250],250), alpha = 0.99)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.mc<-przyjete.kupiec.mc+ifelse(BacktestVaR(dane.var$NDX[i:(249+i)], rep(dane.var$var.MC.NDX[i+250],250), alpha = 0.99)$LRuc[2]>0.05,1,0)
+przyjete.ch.mc<-przyjete.ch.mc+ifelse(BacktestVaR(dane.var$NDX[i:(249+i)], rep(dane.var$var.MC.NDX[i+250],250), alpha = 0.99)$LRcc[2]>0.05,1,0)
+przyjete.dq.mc<-przyjete.dq.mc+ifelse(BacktestVaR(dane.var$NDX[i:(249+i)], rep(dane.var$var.MC.NDX[i+250],250), alpha = 0.99)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.ewma<-przyjete.kupiec.ewma+ifelse(BacktestVaR(dane.var$NDX[i:(249+i)], rep(dane.var$var.EWMA.NDX[i+250],250), alpha = 0.99)$LRuc[2]>0.05,1,0)
+przyjete.ch.ewma<-przyjete.ch.ewma+ifelse(BacktestVaR(dane.var$NDX[i:(249+i)], rep(dane.var$var.EWMA.NDX[i+250],250), alpha = 0.99)$LRcc[2]>0.05,1,0)
+przyjete.dq.ewma<-przyjete.dq.ewma+ifelse(BacktestVaR(dane.var$NDX[i:(249+i)], rep(dane.var$var.EWMA.NDX[i+250],250), alpha = 0.99)$DQ[2]>0.05,1,0)
+   
+}
+
+
+wynikiNDX$MetodaVar<-rownames(wynikiNDX)
+wynikiNDX<-wynikiNDX[,c("MetodaVar", "Kupiec", "Christoffesen","Dynamiczny")]
+wynikiNDX[1,2]<-przyjete.kupiec.hist/3776
+wynikiNDX[1,3]<-przyjete.ch.hist/3776
+wynikiNDX[1,4]<-przyjete.dq.hist/3776
+wynikiNDX[2,2]<-przyjete.kupiec.hist.wagi/3776
+wynikiNDX[2,3]<-przyjete.ch.hist.wagi/3776
+wynikiNDX[2,4]<-przyjete.dq.hist.wagi/3776
+wynikiNDX[3,2]<-przyjete.kupiec.mc/3776
+wynikiNDX[3,3]<-przyjete.ch.mc/3776
+wynikiNDX[3,4]<-przyjete.dq.mc/3776
+wynikiNDX[4,2]<-przyjete.kupiec.ewma/3776
+wynikiNDX[4,3]<-przyjete.ch.ewma/3776
+wynikiNDX[4,4]<-przyjete.dq.ewma/3776
+table <- ggtexttable(wynikiNDX, rows = NULL, 
+                        theme = ttheme("mBlue",base_size = 11))
+tab_add_title(table,text="NASDAQ100 VaR 99%", hjust = -0.85)
+
+```
+
+VaRy 99% wyznaczne metodą historyczną, historyczną z wagami oraz przy użyciu modelu EWMA, nie róznią się znacznie w procencie akceptowanych wyników. Znacznie odstaje natomiast metoda Monte carlo. Prawdopodobnie dzieje się tak ze względu na brak normalności rozkładu stóp procentowych.
+
+Warty uwagi jest również fakt, że test DQ akceptuje VaR w znacznie mniejszym niż test kupca. Biorąc pod uwagę łączną ilość akceptacji hipotez zerowych, najlepszą metoda dla wyznaczenia 99% VaR dla NASDAQ100 okazuje się być metoda historyczna z wagami, jedynie o kilka akceptacji wyprzedzająca metodę historyczną.
+
+```{r, echo=FALSE, out.height="50%", fig.height=2}
+
+library(GAS)
+wynikiRUT<-data.frame(row.names=c("Historyczna", "Historyczna z wagami","Monte Carlo","EWMA"))
+wynikiRUT$Kupiec<-NA
+wynikiRUT$Christoffesen<-NA
+wynikiRUT$Dynamiczny<-NA
+przyjete.kupiec.hist<-0
+przyjete.ch.hist<-0
+przyjete.dq.hist<-0
+przyjete.kupiec.hist.wagi<-0
+przyjete.ch.hist.wagi<-0
+przyjete.dq.hist.wagi<-0
+przyjete.kupiec.mc<-0
+przyjete.ch.mc<-0
+przyjete.dq.mc<-0
+przyjete.kupiec.ewma<-0
+przyjete.ch.ewma<-0
+przyjete.dq.ewma<-0
+
+for (i in seq(1,nrow(dane.var2)-250,1)){
+przyjete.kupiec.hist<-przyjete.kupiec.hist+ifelse(BacktestVaR(dane.var$RUT[i:(249+i)], rep(dane.var$var.hist.RUT[i+250],250), alpha = 0.99)$LRuc[2]>0.05,1,0)
+przyjete.ch.hist<-przyjete.ch.hist+ifelse(BacktestVaR(dane.var$RUT[i:(249+i)], rep(dane.var$var.hist.RUT[i+250],250), alpha = 0.99)$LRcc[2]>0.05,1,0)
+przyjete.dq.hist<-przyjete.dq.hist+ifelse(BacktestVaR(dane.var$RUT[i:(249+i)], rep(dane.var$var.hist.RUT[i+250],250), alpha = 0.99)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.hist.wagi<-przyjete.kupiec.hist.wagi+ifelse(BacktestVaR(dane.var$RUT[i:(249+i)], rep(dane.var$var.hist.wagi.RUT[i+250],250), alpha = 0.99)$LRuc[2]>0.05,1,0)
+przyjete.ch.hist.wagi<-przyjete.ch.hist.wagi+ifelse(BacktestVaR(dane.var$RUT[i:(249+i)], rep(dane.var$var.hist.wagi.RUT[i+250],250), alpha = 0.99)$LRcc[2]>0.05,1,0)
+przyjete.dq.hist.wagi<-przyjete.dq.hist.wagi+ifelse(BacktestVaR(dane.var$RUT[i:(249+i)], rep(dane.var$var.hist.wagi.RUT[i+250],250), alpha = 0.99)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.mc<-przyjete.kupiec.mc+ifelse(BacktestVaR(dane.var$RUT[i:(249+i)], rep(dane.var$var.MC.RUT[i+250],250), alpha = 0.99)$LRuc[2]>0.05,1,0)
+przyjete.ch.mc<-przyjete.ch.mc+ifelse(BacktestVaR(dane.var$RUT[i:(249+i)], rep(dane.var$var.MC.RUT[i+250],250), alpha = 0.99)$LRcc[2]>0.05,1,0)
+przyjete.dq.mc<-przyjete.dq.mc+ifelse(BacktestVaR(dane.var$RUT[i:(249+i)], rep(dane.var$var.MC.RUT[i+250],250), alpha = 0.99)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.ewma<-przyjete.kupiec.ewma+ifelse(BacktestVaR(dane.var$RUT[i:(249+i)], rep(dane.var$var.EWMA.RUT[i+250],250), alpha = 0.99)$LRuc[2]>0.05,1,0)
+przyjete.ch.ewma<-przyjete.ch.ewma+ifelse(BacktestVaR(dane.var$RUT[i:(249+i)], rep(dane.var$var.EWMA.RUT[i+250],250), alpha = 0.99)$LRcc[2]>0.05,1,0)
+przyjete.dq.ewma<-przyjete.dq.ewma+ifelse(BacktestVaR(dane.var$RUT[i:(249+i)], rep(dane.var$var.EWMA.RUT[i+250],250), alpha = 0.99)$DQ[2]>0.05,1,0)
+   
+}
+
+
+wynikiRUT$MetodaVar<-rownames(wynikiRUT)
+wynikiRUT<-wynikiRUT[,c("MetodaVar", "Kupiec", "Christoffesen","Dynamiczny")]
+wynikiRUT[1,2]<-przyjete.kupiec.hist/3776
+wynikiRUT[1,3]<-przyjete.ch.hist/3776
+wynikiRUT[1,4]<-przyjete.dq.hist/3776
+wynikiRUT[2,2]<-przyjete.kupiec.hist.wagi/3776
+wynikiRUT[2,3]<-przyjete.ch.hist.wagi/3776
+wynikiRUT[2,4]<-przyjete.dq.hist.wagi/3776
+wynikiRUT[3,2]<-przyjete.kupiec.mc/3776
+wynikiRUT[3,3]<-przyjete.ch.mc/3776
+wynikiRUT[3,4]<-przyjete.dq.mc/3776
+wynikiRUT[4,2]<-przyjete.kupiec.ewma/3776
+wynikiRUT[4,3]<-przyjete.ch.ewma/3776
+wynikiRUT[4,4]<-przyjete.dq.ewma/3776
+table <- ggtexttable(wynikiRUT, rows = NULL, 
+                        theme = ttheme("mBlue",base_size = 11))
+tab_add_title(table,text="RUSSELL2000 VaR 99%", hjust = -0.8)
+```
+
+W przypadku indeksu RUT, można zaobserwować to samo co w przypadku NDX, czyli że VaR metodą monte carlo jest wyznaczony zdecydowanie gorzej od metod pozostałych.
+
+Biorąc pod uwagę łączną ilość akceptacji hipotez zerowych, najlepszą metoda dla wyznaczenia 99% VaR dla RUSSELL2000 okazuje się być metoda historyczna z wagami.
+
+```{r, echo=FALSE, out.height="50%", fig.height=2}
+wynikiNYA<-data.frame(row.names=c("Historyczna", "Historyczna z wagami","Monte Carlo","EWMA"))
+wynikiNYA$Kupiec<-NA
+wynikiNYA$Christoffesen<-NA
+wynikiNYA$Dynamiczny<-NA
+przyjete.kupiec.hist<-0
+przyjete.ch.hist<-0
+przyjete.dq.hist<-0
+przyjete.kupiec.hist.wagi<-0
+przyjete.ch.hist.wagi<-0
+przyjete.dq.hist.wagi<-0
+przyjete.kupiec.mc<-0
+przyjete.ch.mc<-0
+przyjete.dq.mc<-0
+przyjete.kupiec.ewma<-0
+przyjete.ch.ewma<-0
+przyjete.dq.ewma<-0
+
+for (i in seq(1,nrow(dane.var2)-250,1)){
+przyjete.kupiec.hist<-przyjete.kupiec.hist+ifelse(BacktestVaR(dane.var$NYA[i:(249+i)], rep(dane.var$var.hist.NYA[i+250],250), alpha = 0.99)$LRuc[2]>0.05,1,0)
+przyjete.ch.hist<-przyjete.ch.hist+ifelse(BacktestVaR(dane.var$NYA[i:(249+i)], rep(dane.var$var.hist.NYA[i+250],250), alpha = 0.99)$LRcc[2]>0.05,1,0)
+przyjete.dq.hist<-przyjete.dq.hist+ifelse(BacktestVaR(dane.var$NYA[i:(249+i)], rep(dane.var$var.hist.NYA[i+250],250), alpha = 0.99)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.hist.wagi<-przyjete.kupiec.hist.wagi+ifelse(BacktestVaR(dane.var$NYA[i:(249+i)], rep(dane.var$var.hist.wagi.NYA[i+250],250), alpha = 0.99)$LRuc[2]>0.05,1,0)
+przyjete.ch.hist.wagi<-przyjete.ch.hist.wagi+ifelse(BacktestVaR(dane.var$NYA[i:(249+i)], rep(dane.var$var.hist.wagi.NYA[i+250],250), alpha = 0.99)$LRcc[2]>0.05,1,0)
+przyjete.dq.hist.wagi<-przyjete.dq.hist.wagi+ifelse(BacktestVaR(dane.var$NYA[i:(249+i)], rep(dane.var$var.hist.wagi.NYA[i+250],250), alpha = 0.99)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.mc<-przyjete.kupiec.mc+ifelse(BacktestVaR(dane.var$NYA[i:(249+i)], rep(dane.var$var.MC.NYA[i+250],250), alpha = 0.99)$LRuc[2]>0.05,1,0)
+przyjete.ch.mc<-przyjete.ch.mc+ifelse(BacktestVaR(dane.var$NYA[i:(249+i)], rep(dane.var$var.MC.NYA[i+250],250), alpha = 0.99)$LRcc[2]>0.05,1,0)
+przyjete.dq.mc<-przyjete.dq.mc+ifelse(BacktestVaR(dane.var$NYA[i:(249+i)], rep(dane.var$var.MC.NYA[i+250],250), alpha = 0.99)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.ewma<-przyjete.kupiec.ewma+ifelse(BacktestVaR(dane.var$NYA[i:(249+i)], rep(dane.var$var.EWMA.NYA[i+250],250), alpha = 0.99)$LRuc[2]>0.05,1,0)
+przyjete.ch.ewma<-przyjete.ch.ewma+ifelse(BacktestVaR(dane.var$NYA[i:(249+i)], rep(dane.var$var.EWMA.NYA[i+250],250), alpha = 0.99)$LRcc[2]>0.05,1,0)
+przyjete.dq.ewma<-przyjete.dq.ewma+ifelse(BacktestVaR(dane.var$NYA[i:(249+i)], rep(dane.var$var.EWMA.NYA[i+250],250), alpha = 0.99)$DQ[2]>0.05,1,0)
+   
+}
+
+
+wynikiNYA$MetodaVar<-rownames(wynikiNYA)
+wynikiNYA<-wynikiNYA[,c("MetodaVar", "Kupiec", "Christoffesen","Dynamiczny")]
+wynikiNYA[1,2]<-przyjete.kupiec.hist/3776
+wynikiNYA[1,3]<-przyjete.ch.hist/3776
+wynikiNYA[1,4]<-przyjete.dq.hist/3776
+wynikiNYA[2,2]<-przyjete.kupiec.hist.wagi/3776
+wynikiNYA[2,3]<-przyjete.ch.hist.wagi/3776
+wynikiNYA[2,4]<-przyjete.dq.hist.wagi/3776
+wynikiNYA[3,2]<-przyjete.kupiec.mc/3776
+wynikiNYA[3,3]<-przyjete.ch.mc/3776
+wynikiNYA[3,4]<-przyjete.dq.mc/3776
+wynikiNYA[4,2]<-przyjete.kupiec.ewma/3776
+wynikiNYA[4,3]<-przyjete.ch.ewma/3776
+wynikiNYA[4,4]<-przyjete.dq.ewma/3776
+table <- ggtexttable(wynikiNYA, rows = NULL, 
+                        theme = ttheme("mBlue",base_size = 11))
+tab_add_title(table,text="NYSE Composite VaR 99%", hjust = -0.75)
+```
+
+W przypadku NYSE, wszystkie metody, za wyjątkiem monte carlo, znów dają wysoki procent akceptacji.
+
+Najlepszą metodą okazała się być metoda historyczna z wagami. Warto też wspomnieć, że dla wszystkich indeksów 99% VaR, wyznaczoany metodami: historyczna i przy pomocy zmienności z moedelm EWMA, jest akceptowany na całej długości okna czasowego przez test kupca. 
+
+### Var 95%
+
+```{r, echo=FALSE, out.height="50%", fig.height=2}
+
+wynikiNDX<-data.frame(row.names=c("Historyczna", "Historyczna z wagami","Monte Carlo","EWMA"))
+wynikiNDX$Kupiec<-NA
+wynikiNDX$Christoffesen<-NA
+wynikiNDX$Dynamiczny<-NA
+przyjete.kupiec.hist<-0
+przyjete.ch.hist<-0
+przyjete.dq.hist<-0
+przyjete.kupiec.hist.wagi<-0
+przyjete.ch.hist.wagi<-0
+przyjete.dq.hist.wagi<-0
+przyjete.kupiec.mc<-0
+przyjete.ch.mc<-0
+przyjete.dq.mc<-0
+przyjete.kupiec.ewma<-0
+przyjete.ch.ewma<-0
+przyjete.dq.ewma<-0
+
+for (i in seq(1,nrow(dane.var2)-250,1)){
+przyjete.kupiec.hist<-przyjete.kupiec.hist+ifelse(BacktestVaR(dane.var2$NDX[i:(249+i)], rep(dane.var2$var.hist.NDX[i+250],250), alpha = 0.95)$LRuc[2]>0.05,1,0)
+przyjete.ch.hist<-przyjete.ch.hist+ifelse(BacktestVaR(dane.var2$NDX[i:(249+i)], rep(dane.var2$var.hist.NDX[i+250],250), alpha = 0.95)$LRcc[2]>0.05,1,0)
+przyjete.dq.hist<-przyjete.dq.hist+ifelse(BacktestVaR(dane.var2$NDX[i:(249+i)], rep(dane.var2$var.hist.NDX[i+250],250), alpha = 0.95)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.hist.wagi<-przyjete.kupiec.hist.wagi+ifelse(BacktestVaR(dane.var2$NDX[i:(249+i)], rep(dane.var2$var.hist.wagi.NDX[i+250],250), alpha = 0.95)$LRuc[2]>0.05,1,0)
+przyjete.ch.hist.wagi<-przyjete.ch.hist.wagi+ifelse(BacktestVaR(dane.var2$NDX[i:(249+i)], rep(dane.var2$var.hist.wagi.NDX[i+250],250), alpha = 0.95)$LRcc[2]>0.05,1,0)
+przyjete.dq.hist.wagi<-przyjete.dq.hist.wagi+ifelse(BacktestVaR(dane.var2$NDX[i:(249+i)], rep(dane.var2$var.hist.wagi.NDX[i+250],250), alpha = 0.95)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.mc<-przyjete.kupiec.mc+ifelse(BacktestVaR(dane.var2$NDX[i:(249+i)], rep(dane.var2$var.MC.NDX[i+250],250), alpha = 0.95)$LRuc[2]>0.05,1,0)
+przyjete.ch.mc<-przyjete.ch.mc+ifelse(BacktestVaR(dane.var2$NDX[i:(249+i)], rep(dane.var2$var.MC.NDX[i+250],250), alpha = 0.95)$LRcc[2]>0.05,1,0)
+przyjete.dq.mc<-przyjete.dq.mc+ifelse(BacktestVaR(dane.var2$NDX[i:(249+i)], rep(dane.var2$var.MC.NDX[i+250],250), alpha = 0.95)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.ewma<-przyjete.kupiec.ewma+ifelse(BacktestVaR(dane.var2$NDX[i:(249+i)], rep(dane.var2$var.EWMA.NDX[i+250],250), alpha = 0.95)$LRuc[2]>0.05,1,0)
+przyjete.ch.ewma<-przyjete.ch.ewma+ifelse(BacktestVaR(dane.var2$NDX[i:(249+i)], rep(dane.var2$var.EWMA.NDX[i+250],250), alpha = 0.95)$LRcc[2]>0.05,1,0)
+przyjete.dq.ewma<-przyjete.dq.ewma+ifelse(BacktestVaR(dane.var2$NDX[i:(249+i)], rep(dane.var2$var.EWMA.NDX[i+250],250), alpha = 0.95)$DQ[2]>0.05,1,0)
+   
+}
+
+
+wynikiNDX$MetodaVar<-rownames(wynikiNDX)
+wynikiNDX<-wynikiNDX[,c("MetodaVar", "Kupiec", "Christoffesen","Dynamiczny")]
+wynikiNDX[1,2]<-przyjete.kupiec.hist/3776
+wynikiNDX[1,3]<-przyjete.ch.hist/3776
+wynikiNDX[1,4]<-przyjete.dq.hist/3776
+wynikiNDX[2,2]<-przyjete.kupiec.hist.wagi/3776
+wynikiNDX[2,3]<-przyjete.ch.hist.wagi/3776
+wynikiNDX[2,4]<-przyjete.dq.hist.wagi/3776
+wynikiNDX[3,2]<-przyjete.kupiec.mc/3776
+wynikiNDX[3,3]<-przyjete.ch.mc/3776
+wynikiNDX[3,4]<-przyjete.dq.mc/3776
+wynikiNDX[4,2]<-przyjete.kupiec.ewma/3776
+wynikiNDX[4,3]<-przyjete.ch.ewma/3776
+wynikiNDX[4,4]<-przyjete.dq.ewma/3776
+table <- ggtexttable(wynikiNDX, rows = NULL, 
+                        theme = ttheme("mBlue",base_size = 11))
+tab_add_title(table,text="NASDAQ100 VaR 95%", hjust = -0.85)
+
+```
+W przypadku dokładności 95% VaR dla NASDAQ100,
+obserwujemy, że metoda monte carlo zaczęła byc akceptowana przez testy znacznie więcej razy.
+
+Łącznie akceptującą najwięcej wyznaczonych VaRów, uwzględniając wszystkie testy, znów okazała się metoda historyczna.
+
+Najlepsze wyniki dal pozostałych indeksów można odczytać z poniższych tabel.
+
+```{r, echo=FALSE, out.height="50%", fig.height=2}
+
+
+wynikiRUT<-data.frame(row.names=c("Historyczna", "Historyczna z wagami","Monte Carlo","EWMA"))
+wynikiRUT$Kupiec<-NA
+wynikiRUT$Christoffesen<-NA
+wynikiRUT$Dynamiczny<-NA
+przyjete.kupiec.hist<-0
+przyjete.ch.hist<-0
+przyjete.dq.hist<-0
+przyjete.kupiec.hist.wagi<-0
+przyjete.ch.hist.wagi<-0
+przyjete.dq.hist.wagi<-0
+przyjete.kupiec.mc<-0
+przyjete.ch.mc<-0
+przyjete.dq.mc<-0
+przyjete.kupiec.ewma<-0
+przyjete.ch.ewma<-0
+przyjete.dq.ewma<-0
+
+for (i in seq(1,nrow(dane.var2)-250,1)){
+przyjete.kupiec.hist<-przyjete.kupiec.hist+ifelse(BacktestVaR(dane.var2$RUT[i:(249+i)], rep(dane.var2$var.hist.RUT[i+250],250), alpha = 0.95)$LRuc[2]>0.05,1,0)
+przyjete.ch.hist<-przyjete.ch.hist+ifelse(BacktestVaR(dane.var2$RUT[i:(249+i)], rep(dane.var2$var.hist.RUT[i+250],250), alpha = 0.95)$LRcc[2]>0.05,1,0)
+przyjete.dq.hist<-przyjete.dq.hist+ifelse(BacktestVaR(dane.var2$RUT[i:(249+i)], rep(dane.var2$var.hist.RUT[i+250],250), alpha = 0.95)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.hist.wagi<-przyjete.kupiec.hist.wagi+ifelse(BacktestVaR(dane.var2$RUT[i:(249+i)], rep(dane.var2$var.hist.wagi.RUT[i+250],250), alpha = 0.95)$LRuc[2]>0.05,1,0)
+przyjete.ch.hist.wagi<-przyjete.ch.hist.wagi+ifelse(BacktestVaR(dane.var2$RUT[i:(249+i)], rep(dane.var2$var.hist.wagi.RUT[i+250],250), alpha = 0.95)$LRcc[2]>0.05,1,0)
+przyjete.dq.hist.wagi<-przyjete.dq.hist.wagi+ifelse(BacktestVaR(dane.var2$RUT[i:(249+i)], rep(dane.var2$var.hist.wagi.RUT[i+250],250), alpha = 0.95)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.mc<-przyjete.kupiec.mc+ifelse(BacktestVaR(dane.var2$RUT[i:(249+i)], rep(dane.var2$var.MC.RUT[i+250],250), alpha = 0.95)$LRuc[2]>0.05,1,0)
+przyjete.ch.mc<-przyjete.ch.mc+ifelse(BacktestVaR(dane.var2$RUT[i:(249+i)], rep(dane.var2$var.MC.RUT[i+250],250), alpha = 0.95)$LRcc[2]>0.05,1,0)
+przyjete.dq.mc<-przyjete.dq.mc+ifelse(BacktestVaR(dane.var2$RUT[i:(249+i)], rep(dane.var2$var.MC.RUT[i+250],250), alpha = 0.95)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.ewma<-przyjete.kupiec.ewma+ifelse(BacktestVaR(dane.var2$RUT[i:(249+i)], rep(dane.var2$var.EWMA.RUT[i+250],250), alpha = 0.95)$LRuc[2]>0.05,1,0)
+przyjete.ch.ewma<-przyjete.ch.ewma+ifelse(BacktestVaR(dane.var2$RUT[i:(249+i)], rep(dane.var2$var.EWMA.RUT[i+250],250), alpha = 0.95)$LRcc[2]>0.05,1,0)
+przyjete.dq.ewma<-przyjete.dq.ewma+ifelse(BacktestVaR(dane.var2$RUT[i:(249+i)], rep(dane.var2$var.EWMA.RUT[i+250],250), alpha = 0.95)$DQ[2]>0.05,1,0)
+   
+}
+
+
+wynikiRUT$MetodaVar<-rownames(wynikiRUT)
+wynikiRUT<-wynikiRUT[,c("MetodaVar", "Kupiec", "Christoffesen","Dynamiczny")]
+wynikiRUT[1,2]<-przyjete.kupiec.hist/3776
+wynikiRUT[1,3]<-przyjete.ch.hist/3776
+wynikiRUT[1,4]<-przyjete.dq.hist/3776
+wynikiRUT[2,2]<-przyjete.kupiec.hist.wagi/3776
+wynikiRUT[2,3]<-przyjete.ch.hist.wagi/3776
+wynikiRUT[2,4]<-przyjete.dq.hist.wagi/3776
+wynikiRUT[3,2]<-przyjete.kupiec.mc/3776
+wynikiRUT[3,3]<-przyjete.ch.mc/3776
+wynikiRUT[3,4]<-przyjete.dq.mc/3776
+wynikiRUT[4,2]<-przyjete.kupiec.ewma/3776
+wynikiRUT[4,3]<-przyjete.ch.ewma/3776
+wynikiRUT[4,4]<-przyjete.dq.ewma/3776
+table <- ggtexttable(wynikiRUT, rows = NULL, 
+                        theme = ttheme("mBlue",base_size = 11))
+tab_add_title(table,text="RUSSELL2000 VaR 95%", hjust = -0.8)
+```
+W przypadku dokładności 95% VaR dla indeksu RUSSELL2000, na podstawie testu Kupca można stwierdzić, że niepoprawnie wyznaczonymi wartościami VaR są metoda monte carlo, oraz z użyciem modelu EWMA.
+
+Podobnie jak w przypadku NASDAQ100, najlepszy wydaje się być wynik uzyskany metoda historyczną z wagami.
+
+
+```{r, echo=FALSE, out.height="50%", fig.height=2}
+
+wynikiNYA<-data.frame(row.names=c("Historyczna", "Historyczna z wagami","Monte Carlo","EWMA"))
+wynikiNYA$Kupiec<-NA
+wynikiNYA$Christoffesen<-NA
+wynikiNYA$Dynamiczny<-NA
+przyjete.kupiec.hist<-0
+przyjete.ch.hist<-0
+przyjete.dq.hist<-0
+przyjete.kupiec.hist.wagi<-0
+przyjete.ch.hist.wagi<-0
+przyjete.dq.hist.wagi<-0
+przyjete.kupiec.mc<-0
+przyjete.ch.mc<-0
+przyjete.dq.mc<-0
+przyjete.kupiec.ewma<-0
+przyjete.ch.ewma<-0
+przyjete.dq.ewma<-0
+
+for (i in seq(1,nrow(dane.var2)-250,1)){
+przyjete.kupiec.hist<-przyjete.kupiec.hist+ifelse(BacktestVaR(dane.var2$NYA[i:(249+i)], rep(dane.var2$var.hist.NYA[i+250],250), alpha = 0.95)$LRuc[2]>0.05,1,0)
+przyjete.ch.hist<-przyjete.ch.hist+ifelse(BacktestVaR(dane.var2$NYA[i:(249+i)], rep(dane.var2$var.hist.NYA[i+250],250), alpha = 0.95)$LRcc[2]>0.05,1,0)
+przyjete.dq.hist<-przyjete.dq.hist+ifelse(BacktestVaR(dane.var2$NYA[i:(249+i)], rep(dane.var2$var.hist.NYA[i+250],250), alpha = 0.95)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.hist.wagi<-przyjete.kupiec.hist.wagi+ifelse(BacktestVaR(dane.var2$NYA[i:(249+i)], rep(dane.var2$var.hist.wagi.NYA[i+250],250), alpha = 0.95)$LRuc[2]>0.05,1,0)
+przyjete.ch.hist.wagi<-przyjete.ch.hist.wagi+ifelse(BacktestVaR(dane.var2$NYA[i:(249+i)], rep(dane.var2$var.hist.wagi.NYA[i+250],250), alpha = 0.95)$LRcc[2]>0.05,1,0)
+przyjete.dq.hist.wagi<-przyjete.dq.hist.wagi+ifelse(BacktestVaR(dane.var2$NYA[i:(249+i)], rep(dane.var2$var.hist.wagi.NYA[i+250],250), alpha = 0.95)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.mc<-przyjete.kupiec.mc+ifelse(BacktestVaR(dane.var2$NYA[i:(249+i)], rep(dane.var2$var.MC.NYA[i+250],250), alpha = 0.95)$LRuc[2]>0.05,1,0)
+przyjete.ch.mc<-przyjete.ch.mc+ifelse(BacktestVaR(dane.var2$NYA[i:(249+i)], rep(dane.var2$var.MC.NYA[i+250],250), alpha = 0.95)$LRcc[2]>0.05,1,0)
+przyjete.dq.mc<-przyjete.dq.mc+ifelse(BacktestVaR(dane.var2$NYA[i:(249+i)], rep(dane.var2$var.MC.NYA[i+250],250), alpha = 0.95)$DQ[2]>0.05,1,0)
+
+przyjete.kupiec.ewma<-przyjete.kupiec.ewma+ifelse(BacktestVaR(dane.var2$NYA[i:(249+i)], rep(dane.var2$var.EWMA.NYA[i+250],250), alpha = 0.95)$LRuc[2]>0.05,1,0)
+przyjete.ch.ewma<-przyjete.ch.ewma+ifelse(BacktestVaR(dane.var2$NYA[i:(249+i)], rep(dane.var2$var.EWMA.NYA[i+250],250), alpha = 0.95)$LRcc[2]>0.05,1,0)
+przyjete.dq.ewma<-przyjete.dq.ewma+ifelse(BacktestVaR(dane.var2$NYA[i:(249+i)], rep(dane.var2$var.EWMA.NYA[i+250],250), alpha = 0.95)$DQ[2]>0.05,1,0)
+   
+}
+
+
+wynikiNYA$MetodaVar<-rownames(wynikiNYA)
+wynikiNYA<-wynikiNYA[,c("MetodaVar", "Kupiec", "Christoffesen","Dynamiczny")]
+wynikiNYA[1,2]<-przyjete.kupiec.hist/3776
+wynikiNYA[1,3]<-przyjete.ch.hist/3776
+wynikiNYA[1,4]<-przyjete.dq.hist/3776
+wynikiNYA[2,2]<-przyjete.kupiec.hist.wagi/3776
+wynikiNYA[2,3]<-przyjete.ch.hist.wagi/3776
+wynikiNYA[2,4]<-przyjete.dq.hist.wagi/3776
+wynikiNYA[3,2]<-przyjete.kupiec.mc/3776
+wynikiNYA[3,3]<-przyjete.ch.mc/3776
+wynikiNYA[3,4]<-przyjete.dq.mc/3776
+wynikiNYA[4,2]<-przyjete.kupiec.ewma/3776
+wynikiNYA[4,3]<-przyjete.ch.ewma/3776
+wynikiNYA[4,4]<-przyjete.dq.ewma/3776
+table <- ggtexttable(wynikiNYA, rows = NULL, 
+                        theme = ttheme("mBlue",base_size = 11))
+tab_add_title(table,text="NYSE Composite VaR 95%", hjust = -0.75)
+```
+
+W przypadku NYSE, najlepsza okazuje się metoda wykorzystująca zmienność stóp zwrotu w czasie. Dla żadnej z metod jednak nie uzyskano wyniku potwierdzającego brak zależności przekroczeń VaR w czasie.
+
+# Podusmowanie
+
+Po analizie, na mocy przeprowadzonych testów wstecznych oraz analiz, mozna wybrać najlepsze metody wyznaczania VaR 99% i 95%.
+
+W poniższej tabeli można zobaczyć zestawienie:
+
+```{r, echo=FALSE, out.height="50%", fig.height=2.5}
+wynikiALL<-data.frame(row.names=c("1","2", "3", "4","5","6"))
+wynikiALL$Metoda<-NA
+wynikiALL$VaR<-NA
+
+wynikiALL[1,1]<-"Historyczna"
+wynikiALL[1,2]<-"95%"
+wynikiALL[2,1]<-"Historyczna z wagami"
+wynikiALL[2,2]<-"99%"
+wynikiALL[3,1]<-"Historyczna z wagami"
+wynikiALL[3,2]<-"95%"
+wynikiALL[4,1]<-"Historyczna z wagami"
+wynikiALL[4,2]<-"99%"
+wynikiALL[5,1]<-"Historyczna"
+wynikiALL[5,2]<-"95%"
+wynikiALL[6,1]<-"Historyczna z wagami"
+wynikiALL[6,2]<-"99%"
+
+
+wynikiALL$Dane<-as.data.frame(c("NDX","NDX","RUT","RUT","NYA","NYA"))
+wynikiALL<-wynikiALL[,c("Dane","Metoda","VaR")]
+
+table <- ggtexttable(wynikiALL, rows = NULL, 
+                        theme = ttheme("mBlue",base_size = 11))
+tab_add_title(table,text="Zestawienie najlepszych metod", hjust = -0.08)
+
+
+
+```
+
+Zdecydowanie najlepsza metodą do modelowania VaR zarówno na poziomie 99% jak i 95% okazała się metoda historyczna z wagami. Możliwe, że wpływ miały na to kryzysy giełdowe i silniejsza responsywność na niedawne stopy zwrotu, metody historycznej z wagami. 
+
+Warte wspomnienia, jest także to, że kiedy test Christoffensena akceptuje 100% wyznacoznych VaRów, znaczy to, że przekroczenia są w dal wszystkich VaRów niezalezne w czasie - co za tym idzie, VaR nie jest odporny tylko na wahania i spadki losowe jak kryzysy czy krachy na giedłdzie.
+
+
+Podsumowując, na podstawie uzyskanych wartości VaR i ES, można stwierdzić, że inwestycje w indexy sa mało ryzykowne. Najbezpieczniejszym - najmniej ryzykownym, okazał się indeks NYA, zarówno biorąc pod uwagę VaR 99% i 95%. Można też powiedzieć, że dla NYSE Composite, zaobserwowano mały procent odrzuceń wartości VaR przez zastosowanie testów wstecznych. Umacnie to tylko stwierdzenie, że NYSE jest indeksem stabilnym. 
+

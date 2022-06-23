@@ -1,0 +1,391 @@
+---
+title: "Sprawozdanie 1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Zadanie 1
+
+```{r, echo=FALSE}
+daned2012 <- read.csv("CenyCD20122013.csv", dec = ",")
+daned2020 <- read.csv("CenyCDR20202021.csv", dec = ",")
+danem2009 <- read.csv("CenyMCD20092021.csv", dec = ",")
+danet2020 <- read.csv("DANECDT20202021.csv", dec = ",")
+danet2012 <- read.csv("DANECDT20122013.csv", dec = ",")
+daned2009 <- read.csv("DANECDRD20092021.csv", dec = ",")
+names(daned2012)<-c("Data","Zamkniecie","Otwarcie", "Max","Min","Wol", "Zmiana")
+names(daned2020)<-c("Data","Zamkniecie","Otwarcie", "Max","Min","Wol", "Zmiana")
+names(danem2009)<-c("Data","Zamkniecie","Otwarcie", "Max","Min","Wol", "Zmiana")
+names(danet2020)<-c("Data","Zamkniecie","Otwarcie", "Max","Min","Wol", "Zmiana")
+names(danet2012)<-c("Data","Zamkniecie","Otwarcie", "Max","Min","Wol", "Zmiana")
+names(daned2009)<-c("Data","Zamkniecie","Otwarcie", "Max","Min","Wol", "Zmiana")
+```
+**Wybraną spółką do analizy, jest CD Projekt Red.**
+
+Dla niej, wczytano 5 zbiorów danych, z których każdy odpowiada odpowiednio:
+
+* **daned2012** - dane dzienne o otwarciu, zamknięciu, wartości maksymalnej oraz minimalnej spółki na giełdzie na przestrzeni lat 2012-2013 
+
+* **daned2020** - dane dzienne o otwarciu, zamknięciu, wartości maksymalnej oraz minimalnej spółki na giełdzie na przestrzeni lat 2020-2021
+
+* **danem2009** - dane miesięczne o otwarciu, zamknięciu, wartości maksymalnej oraz minimalnej spółki na giełdzie na przestrzeni lat 2020-2021
+
+* **danet2012** - dane tygodniowe o otwarciu, zamknięciu, wartości maksymalnej oraz minimalnej spółki na giełdzie na przestrzeni lat 2012-2013 
+
+* **danet2020** - dane tygodniowe o otwarciu, zamknięciu, wartości maksymalnej oraz minimalnej spółki na giełdzie na przestrzeni lat 2020-2021
+
+Dane wyglądają następująco:
+
+```{r, echo=FALSE, fig.align='center'}
+library(ggplot2)
+ggplot(daned2012, aes(x=as.Date(Data,"%d.%m.%Y"), y=Zamkniecie))+geom_line()+
+  labs(title = "Zamknięcia CDPR dzienne 2012-2013")
+ggplot(daned2020, aes(x=as.Date(Data,"%d.%m.%Y"), y=Zamkniecie))+geom_line()+geom_line()+
+  labs(title = "Zamknięcia CDPR dzienne 2020-2021")
+ggplot(danem2009, aes(x=as.Date(Data,"%d.%m.%Y"), y=Zamkniecie))+geom_line()+geom_line()+
+  labs(title = "Zamknięcia CDPR miesięczne 2009-2021")
+ggplot(danet2012, aes(x=as.Date(Data,"%d.%m.%Y"), y=Zamkniecie))+geom_line()+geom_line()+
+  labs(title = "Zamknięcia CDPR dzienne 2012-2013")
+ggplot(danet2020, aes(x=as.Date(Data,"%d.%m.%Y"), y=Zamkniecie))+geom_line()+geom_line()+
+  labs(title = "Zamknięcia CDPR dzienne 2020-2021")
+
+```
+
+Dla pierwszych dwóch zbiorów danych obliczono dzienne proste i logarytmiczne stopy zwrotu, a dla trzeciego - miesięczne.
+
+Zrobiono to przy użyciu pakietu
+
+```{r, echo=TRUE, include=FALSE}
+library(dplyr)
+```
+```{r, echo=TRUE, eval=FALSE}
+library(dplyr)
+```
+
+* Najpierw zmieniając wczytaną z pliku zmienną Date na format daty, 
+
+* Następnie sortując dane według zmiennej Date
+
+* I tworząc prostą stopę zwrotu wg wzoru $$ U_p(t) = 100*\frac{X_t-X_{t-1}}{X_{t-1}} $$
+
+* Oraz stopę logarytmiczną wg wzoru $$ U_l(t) = 100*ln(\frac{X_t}{X_{t-1})} $$
+
+```{r}
+daned2012$Data<-as.Date(daned2012$Data,"%d.%m.%Y") ##Zmiana formatu
+daned2012<-daned2012 %>%  
+  arrange(Data) %>% ##Sort
+    mutate(prosta = (Zamkniecie-lag(Zamkniecie))/lag(Zamkniecie)*100) %>%#prosta
+      mutate(logarytm = log(Zamkniecie/lag(Zamkniecie))*100) #logarytmiczna
+head(daned2012)
+```
+
+Cały proces powtórzono dla wszystkich zbiorów danych.
+
+```{r, echo=TRUE, include=FALSE}
+daned2020$Data<-as.Date(daned2020$Data,"%d.%m.%Y")
+daned2020<-daned2020 %>% 
+  arrange(Data) %>%
+    mutate(prosta = (Zamkniecie-lag(Zamkniecie))/lag(Zamkniecie)*100)%>%       mutate(logarytm = log(Zamkniecie/lag(Zamkniecie))*100)
+
+danem2009$Data<-as.Date(danem2009$Data,"%d.%m.%Y")
+danem2009<-danem2009 %>% 
+  arrange(Data) %>%
+    mutate(prosta = (Zamkniecie-lag(Zamkniecie))/lag(Zamkniecie)*100)%>%       mutate(logarytm = log(Zamkniecie/lag(Zamkniecie))*100)
+
+danet2012$Data<-as.Date(danet2012$Data,"%d.%m.%Y")
+danet2012<-danet2012 %>% 
+  arrange(Data) %>%
+    mutate(prosta = (Zamkniecie-lag(Zamkniecie))/lag(Zamkniecie)*100)%>%       mutate(logarytm = log(Zamkniecie/lag(Zamkniecie))*100)
+
+danet2020$Data<-as.Date(danet2020$Data,"%d.%m.%Y")
+danet2020<-danet2020 %>% 
+  arrange(Data) %>%
+    mutate(prosta = (Zamkniecie-lag(Zamkniecie))/lag(Zamkniecie)*100)%>%       mutate(logarytm = log(Zamkniecie/lag(Zamkniecie))*100)
+
+daned2009$Data<-as.Date(daned2009$Data,"%d.%m.%Y")
+daned2009<-daned2009 %>% 
+  arrange(Data) %>%
+    mutate(prosta = (Zamkniecie-lag(Zamkniecie))/lag(Zamkniecie)*100)%>%       mutate(logarytm = log(Zamkniecie/lag(Zamkniecie))*100)
+```
+
+Na wykresach poniżej, przy użyciu pakietów ggplot2, magrittr oraz multipanelfigure przedstawiono odpowiednio dzienne i miesięczne stopy zwrotu w czasie:
+
+```{r, echo=TRUE, include=FALSE}
+library(ggplot2)
+library(magrittr)
+library(multipanelfigure)
+```
+```{r, echo=TRUE, eval=FALSE}
+library(ggplot2)
+library(magrittr)
+library(multipanelfigure)
+```
+```{r, echo=FALSE, warning=FALSE, fig.align='center'}
+colors <- c("logarytmiczna" = "blue", "prosta" = "red")
+q1<-ggplot(daned2012, aes(x=Data)) + 
+    geom_line(aes(y=prosta, color = "prosta"), size=1)+
+      geom_line(aes(y=logarytm,color="logarytmiczna"),linetype="twodash")+
+        xlab("") +ylab("wartosc stopy(%)")+ 
+          scale_color_manual(values = colors, name="Legenda")
+q1
+```
+
+Na podstawie powyższego wykresu zmian dziennych mozna zauważyć, że różnice pomiędzy stopą logarytmiczną a prostą są bardzo małe. 
+
+```{r, echo=FALSE, warning=FALSE, fig.align='center'}
+q2 <- ggplot(daned2012, aes(x=Data)) + geom_line(aes(y=prosta-logarytm))+
+  ylab("różnica(%)")
+q2
+
+```
+
+Robiąc wykres różnic między wartościami stopy prostej a logarytmicznej, można stwierdzić, że rzeczywiście, różnice między stopami nie przekraczają 1%.
+
+Na wykresach poniżej można zobaczyć zestawienie dla wszystkich pozostałych zbiorów danych i wszystkich okresów czasowych:
+```{r, echo=FALSE, warning=FALSE, fig.align='center', out.width='200%', out.height='200%'}
+q3 <- ggplot(daned2020, aes(x=Data)) + 
+    geom_line(aes(y=prosta, color = "prosta"), size=1)+
+      geom_line(aes(y=logarytm,color="logarytmiczna"),linetype="twodash")+
+        xlab("") +ylab("wartosc stopy(%)")+ 
+          scale_color_manual(values = colors, name="Legenda")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+q4 <- ggplot(daned2020, aes(x=Data)) + geom_line(aes(y=prosta-logarytm))+
+  ylab("różnica(%)")
+q5 <- ggplot(danem2009, aes(x=Data)) + 
+    geom_line(aes(y=prosta, color = "prosta"), size=1)+
+      geom_line(aes(y=logarytm,color="logarytmiczna"),linetype="twodash")+
+        xlab("") +ylab("wartosc stopy(%)")+ 
+          scale_color_manual(values = colors, name="Legenda") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+q6 <- ggplot(danem2009, aes(x=Data)) + geom_line(aes(y=prosta-logarytm))+
+  ylab("różnica(%)")
+q7 <- ggplot(danet2012, aes(x=Data)) + 
+    geom_line(aes(y=prosta, color = "prosta"), size=1)+
+      geom_line(aes(y=logarytm,color="logarytmiczna"),linetype="twodash")+
+        xlab("") +ylab("wartosc stopy(%)")+ 
+          scale_color_manual(values = colors, name="Legenda")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+q8 <- ggplot(danet2012, aes(x=Data)) + geom_line(aes(y=prosta-logarytm))+
+  ylab("różnica(%)")
+q9 <- ggplot(danet2020, aes(x=Data)) + 
+    geom_line(aes(y=prosta, color = "prosta"), size=1)+
+      geom_line(aes(y=logarytm,color="logarytmiczna"),linetype="twodash")+
+        xlab("") +ylab("wartosc stopy(%)")+ 
+          scale_color_manual(values = colors, name="Legenda") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+q10 <- ggplot(danet2020, aes(x=Data)) + geom_line(aes(y=prosta-logarytm))+
+  ylab("różnica(%)")
+
+figure1 <- multi_panel_figure(columns = 2, rows = 2, panel_label_type = "none")
+
+figure1 %<>%
+  fill_panel(q3, column = 1, row = 1) %<>%
+  fill_panel(q4, column = 2, row = 1) %<>%
+  fill_panel(q5, column = 1, row = 2) %<>%
+  fill_panel(q6, column = 2, row = 2) 
+figure1
+
+figure2 <- multi_panel_figure(columns = 2, rows = 2, panel_label_type = "none")
+
+figure2 %<>%
+  fill_panel(q7, column = 1, row = 1) %<>%
+  fill_panel(q8, column = 2, row = 1) %<>%
+  fill_panel(q9, column = 1, row = 2) %<>%
+  fill_panel(q10, column = 2, row = 2) 
+figure2
+```
+
+W przypadku danych miesięcznych, logarytmiczne i proste stopy zwrotu różnia się znacznie(aż do 25%), a w przypadku danych tygodniowych maksymalna rozniica wynosi około 4%. Można więc stwierdzić, że im dłuższy okres pomiędzy pomiarami, tym większe mogą być maksymalne różnice między stopą prostą a logarytmiczną.
+
+
+Warto też dodać, że różnica została obliczona w postaci $$ U_p-U_l $$ co nakazuje twierdzić, że wartości prostej stopy zwrotu są wyższe niż wartości stopy logarytmicznej.
+
+
+## Zadanie 2
+
+Dla wartości stóp prostych oraz logarytmicznych sprawdzono, czy należą one do rozkładu normalnego przy pomocy trzech testów:
+
+* Shapiro-Wilka
+
+* Andersona-Darlinga
+
+* Jarque-Bery
+
+Wyniki wartości p dla poszczególnych testów można zobaczyć w tabeli poniżej:
+
+```{r, echo=TRUE, include=FALSE}
+library(tseries)
+library(nortest)
+```
+```{r, echo=TRUE, eval=FALSE}
+library(tseries)
+library(nortest)
+```
+```{r, echo=FALSE}
+shapiro<-c(
+shapiro.test(daned2012$prosta)$p.value,
+shapiro.test(daned2020$prosta)$p.value,
+shapiro.test(danem2009$prosta)$p.value,
+shapiro.test(danet2012$prosta)$p.value,
+shapiro.test(danet2020$prosta)$p.value,
+shapiro.test(daned2012$logarytm)$p.value,
+shapiro.test(daned2020$logarytm)$p.value,
+shapiro.test(danem2009$logarytm)$p.value,
+shapiro.test(danet2012$logarytm)$p.value,
+shapiro.test(danet2020$logarytm)$p.value
+)
+jb<-c(
+jarque.bera.test(na.omit(daned2012$prosta))$p.value,
+jarque.bera.test(na.omit(daned2020$prosta))$p.value,
+jarque.bera.test(na.omit(danem2009$prosta))$p.value,
+jarque.bera.test(na.omit(danet2012$prosta))$p.value,
+jarque.bera.test(na.omit(danet2020$prosta))$p.value,
+jarque.bera.test(na.omit(daned2012$logarytm))$p.value,
+jarque.bera.test(na.omit(daned2020$logarytm))$p.value,
+jarque.bera.test(na.omit(danem2009$logarytm))$p.value,
+jarque.bera.test(na.omit(danet2012$logarytm))$p.value,
+jarque.bera.test(na.omit(danet2020$logarytm))$p.value
+)
+ad<-c(
+ad.test(daned2012$prosta)$p.value,
+ad.test(daned2020$prosta)$p.value,
+ad.test(danem2009$prosta)$p.value,
+ad.test(danet2012$prosta)$p.value,
+ad.test(danet2020$prosta)$p.value,
+ad.test(daned2012$logarytm)$p.value,
+ad.test(daned2020$logarytm)$p.value,
+ad.test(danem2009$logarytm)$p.value,
+ad.test(danet2012$logarytm)$p.value,
+ad.test(danet2020$logarytm)$p.value
+)
+d<-as.data.frame(cbind(round(ad,2), round(jb,2), round(shapiro,2)))
+row.names(d)<-c("Dzienne 2012-2013 prosta",
+                "Dzienne 2020-2021 prosta",
+                "Miesieczne 2009-2021 prosta",
+                "Tygodniowe 2012-2013 prosta",
+                "Tygodniowe 2020-2021 prosta",
+                "Dzienne 2012-2013 logarytmiczna",
+                "Dzienne 2020-2021 logarytmiczna",
+                "Miesieczne 2009-2021 logarytmiczna",
+                "Tygodniowe 2012-2013 logarytmiczna",
+                "Tygodniowe 2020-2021 logarytmiczna"
+                )
+names(d)<-c("AD","JB","SW")
+d
+```
+
+Na podstawie tabeli z wartościami p, mozna wyciągnąć niejednoznaczne wnioski. 
+
+Jedynie w przypadku stóp dla danych tygodniowych w latach 2012-2013, na poziomie istotności 5% nie ma podstaw, aby sądzić że nie mają one rozkładu normalnego.
+
+Nie dotyczy to jednak wszystkich stóp dla danych tygodniowych, bo te z przedziału 2020-2021, nie mają rozkładu normalnego na poziomie istotności 5%.
+
+Wspierając się wynikami dla innych interwałów czasowych, można sądzić, że przez przypadek stopy logarytmiczne dla danych tygodniowych z lat 2012-2013 posiadają rozkład normalny. Należałoby to jednak poddać dodatkowemu badaniu uwzględniając jedynie stopy z danych tyogdniowych.
+
+
+## Zadanie 3
+
+```{r, echo=FALSE}
+m<-mean(na.omit(daned2009$logarytm))
+s<-sd(na.omit(daned2009$logarytm))
+
+hipotetyczne<-as.data.frame(rnorm(length(na.omit(daned2009$logarytm)), m,s))
+names(hipotetyczne)<-c("val")
+hipot<-c(
+sum(abs(select(hipotetyczne,val)-m) < s),
+sum(abs(select(hipotetyczne,val)-m) < 2*s)-sum(abs(select(hipotetyczne,val)-m) < s),
+sum(abs(select(hipotetyczne,val)-m) < 3*s)-sum(abs(select(hipotetyczne,val)-m) < 2*s),
+sum(abs(select(hipotetyczne,val)-m) < 4*s)-sum(abs(select(hipotetyczne,val)-m) < 3*s),
+sum(abs(select(hipotetyczne,val)-m) < 5*s)-sum(abs(select(hipotetyczne,val)-m) < 4*s),
+sum(abs(select(hipotetyczne,val)-m) > 5*s)
+)
+dane<-na.omit(daned2009)
+realne<-c(
+sum(abs(select(dane,logarytm)-m) < s),
+sum(abs(select(dane,logarytm)-m) < 2*s)-sum(abs(select(dane,logarytm)-m) < s),
+sum(abs(select(dane,logarytm)-m) < 3*s)-sum(abs(select(dane,logarytm)-m) < 2*s),
+sum(abs(select(dane,logarytm)-m) < 4*s)-sum(abs(select(dane,logarytm)-m) < 3*s),
+sum(abs(select(dane,logarytm)-m) < 5*s)-sum(abs(select(dane,logarytm)-m) < 4*s),
+sum(abs(select(dane,logarytm)-m) > 5*s)
+)
+  
+d<-as.data.frame(cbind(hipot,realne))
+row.names(d)<-c("<1SD",
+                "1-2SD",
+                "2-3SD",
+                "3-4SD",
+                "4-5SD",
+                ">5SD"
+                )
+names(d)<-c("Hipotetyczne ~N(m,sd)", "Realne")
+d
+```
+
+Na podstawie powyższej tabeli można stwierdzić, że logarytmiczne stopy zwrotu dla danych realnych znacznie bardziej odstają od średniej niż dane pochodzące z rozkładu normalnego.
+
+Można więc sądzić, że realny rozkład stóp logarytmicznych posiada wahannia, których amplituda może przekraczać nawet 5 odchyleń standardowych.
+
+## Zadanie 4
+
+Aby sprawdzić zgodność rozkładu dziennych stóp logarytmicznych z okresu lat 2009-2021 z teoretyzcnymi rozkładami posłużono się poniżsyzm wykresem:
+
+```{r, echo=FALSE}
+library(ggplot2)
+ggplot(daned2009, aes(x=logarytm))+geom_density()
+```
+
+Na podstawie oceny wizualnej, mozna odrzucić zgodność z rozkładami takimi jak:
+
+* rozkład jednostajny,
+
+* rozkład F,
+
+* rozkład chi-kwadrat,
+
+* rozkład wykładniczy,
+
+* rozkład gamma,
+
+* rozkład log-normalny.
+
+Także na podstawie oceny wizualnej, można wybrac kandydatów na sprawdzenie zgodności i są nimi:
+
+* rozkład Laplace'a,
+
+* rozkład t-Studenta.
+
+
+Wynkonano kilkanaście prób nałożenia na siebie wykresów gęstości w zależności od parametrów powyższych rozkładów. 
+Tak prezentują się wyksresy najbardziej nakładające się na tle rozkładu empirycznego:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(ExtDist)
+t<-as.data.frame(rt(2687, 1))
+names(t)<-c("V1")
+library(reshape2)
+l<-as.data.frame(rLaplace(2687,0,2))
+names(t)<-c("V3")
+
+x<-cbind(na.omit(daned2009$logarytm), l, t)
+names(x)<-c("real","laplace","t")
+data<- melt(x)
+library(ggplot2)
+ggplot(data,aes(x=value, fill=variable)) + geom_density(alpha=0.25)+xlim(-3,3)
+```
+
+
+Po dokładniejszej analizie, można zobaczyć, że rozkład laplace'a ze średnią 0 i czynnikiem skali 2 z rozkładem empirycznym praktycznie się na siebie nakładają.
+
+Wykonano więc, test Kołomogorowa-Smirnowa zgodności rozkładu empirycznego z rozkładem laplace'a z powyższymi parametrami, oraz z rozkładem t-Studenta. Wyniki zamieszczono 
+
+```{r, echo=FALSE, warning=FALSE}
+ks.test(x$real,x$laplace)
+ks.test(x$t, x$real)
+
+
+```
+Na podstawie wyników, na poziomie istotności 5% można stwierdzić, ze nie ma podstaw aby sądzić, że rozkład danych dziennych stóp zwrotu dla badanych danych ma rozkład laplacea z parametrami 0 i 2 czy też rozkład t-studenta z 1 stopniem swobody.
+

@@ -1,0 +1,198 @@
+---
+title: "Sprawozdanie z zajęć 3 - IMRR"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+dane <- read.csv("ndq.csv")
+dane <- dane[c(1,2,5)]
+```
+
+```{r, echo= FALSE, message=FALSE}
+library(dplyr)
+library(MTS)
+library(spatstat)
+library(ggplot2)
+library(ggridges)
+dane<-dane %>%  
+  arrange(Date) %>% ##Sort
+      mutate(logarytm = log(Close/lag(Close))*100)
+dane_strata <- data.frame(Data=dane$Date, 
+                          logCh=-dane$logarytm)
+dane_strata <- dane_strata %>% add_row()  # tutaj przechowywane będą prognozy
+dane_strata$logCh[1]<-log(dane$Close[1]/dane$Open[1])
+```
+
+# Wprowadzenie
+
+Wszystkie wykonane obliczenia VaR i ES, bazują na logarytmicznych stopach zwrotu obliczonych dla danych Indeksu NASDQ100. Dane zawierają 1260 obserwacji dziennych z okresu od 01.01.2017 r. do 01.01.2022 r. 
+
+Poniżej zaprezentowano 4 metody wyznaczania VaR.
+
+
+# Metoda symulacji historycznych
+
+
+```{r, echo=FALSE,warning=FALSE}
+iloscDni = 500
+dane_strata$var_99_historyczna_500 <- NA
+dane_strata$es_99_historyczna_500 <- NA
+
+for (i in seq(1,nrow(dane_strata)-500,1)){
+  fragmentDanych <- dane_strata[i:(499+i),]
+  kw_99 <- quantile(fragmentDanych$logCh, 0.99, na.rm = T)
+  dane_strata$var_99_historyczna_500[500+i] <- kw_99
+  
+  # ES - średnia ze scenariuszy powyżej VaR
+  fragmentDanych2 <- fragmentDanych %>% filter(logCh > kw_99)
+  warunkowa_99 = mean(fragmentDanych2$logCh)
+  dane_strata$es_99_historyczna_500[500+i] <- warunkowa_99
+}
+
+danex<-dane_strata[c(1,3)]
+danex<-na.omit(danex)
+new<-data.frame()
+for(i in seq(500,nrow(dane_strata),30)){
+  new_frame <- as.data.frame(rep(dane_strata$Data[i],500))
+  new_frame$logs<-dane_strata$logCh[(i-499):i]
+  new<-rbind.data.frame(new,new_frame)
+}
+
+names(new)<-c("Date", "Logs")
+
+
+gg_shares <- ggplot(new,
+    aes(x = Logs, y = Date, group = Date))+
+  geom_density_ridges_gradient(
+    scale=2, size = 0.4, rel_min_height = 0.03, calc_ecdf=TRUE) +
+  xlab("Rozkład 500-dniowych zwrotów") + ylab("")
+
+gg_shares
+
+```
+
+Na powyższym wykresie przedstawiono zmieniający się w czasie rozkład empiryczny stóp zwrotu. Widać, że z czasem ogony rozciągają się, ale średnia pozostaje taka sama, co nakazuje sądzić, że zarówno wartości VaR jak i ES, będą wzrastać z czasem. 
+
+
+```{r, echo=FALSE, warning=FALSE}
+dane_strata$Data<-as.Date(dane_strata$Data)
+
+plot1<-ggplot(dane_strata, aes(x=Data))+
+  geom_line(aes(y=es_99_historyczna_500, colour="ES 99%"))+
+  geom_line(aes(y=var_99_historyczna_500, colour="VaR 99%"))
+
+plot1
+
+
+```
+
+Tak jak się spodziewano, wartości VaR i ES wyraźnie rosną wraz z czasem. W dodatku można powiedzieć, że inwestowanie w indeks NASDQ100 jest mało ryzykowne, gdyż wartość VaR jak i ES nie przekracza 10%, a co za tym idzie, oczekiwana maksymalna strata z inwestycji to mniej niż 10%.
+
+# Metoda symulacji historycznych z wagami
+
+```{r, echo=FALSE,warning=FALSE}
+iloscDni = 500
+dane_strata$var_99_historyczna_500_w <- NA
+dane_strata$es_99_historyczna_500_w <- NA
+
+probs<- rep(0,500)
+q=.995
+
+for(i in seq(1,500,1)){
+  probs[i]<- (q**(500-i)*(1-q))/(1-q**500)
+}
+probs1<-as.data.frame(probs)
+
+
+for (i in seq(1,nrow(dane_strata)-500,1)){
+  fragmentDanych <- dane_strata[i:(499+i),]
+  kw_99 <- quantile.density(density(fragmentDanych$logCh, weights = probs), .99)
+  dane_strata$var_99_historyczna_500_w[500+i] <- kw_99
+  
+  # ES - średnia ze scenariuszy powyżej VaR
+  fragmentDanych2 <- fragmentDanych %>% filter(logCh > kw_99)
+  warunkowa_99 = mean(fragmentDanych2$logCh)
+  dane_strata$es_99_historyczna_500_w[500+i] <- warunkowa_99
+}
+
+dane_strata$Data<-as.Date(dane_strata$Data)
+
+plot1<-ggplot(dane_strata, aes(x=Data))+
+  geom_line(aes(y=es_99_historyczna_500_w, colour="ES_w 99%"))+
+  geom_line(aes(y=var_99_historyczna_500_w, colour="VaR_w 99%"))
+
+plot1
+```
+
+Na powyższym wykresie widać, że przypisując mniejsze wagi starszym obserwacjom, wartości VaR i ES, bardziej skupiają się na stosunkowo niedawnych obserwacjach. Widać to w w punkcie (~styczeń 2020), w którym dla metody historycznej wystąpił skok (najprawdopodobniej spowodowany spadkami związanymi z COVIDEM). Spadki te mocniej wpłyneły na VaR liczony metoda historyczną z wagami, za to później, stopniowo spadły.
+
+# Metoda monte carlo
+
+```{r, echo=FALSE,warning=FALSE}
+iloscDni = 500
+dane_strata$var_99_monte_carlo <- NA
+dane_strata$es_99_monte_carlo <- NA
+
+
+for (i in seq(1,nrow(dane_strata)-500,1)){
+  fragmentDanych <- dane_strata[i:(499+i),]
+  fake<- rnorm(1000,mean(fragmentDanych$logCh), sd(fragmentDanych$logCh))
+  kw_99<-quantile(fake, .99)
+  dane_strata$var_99_monte_carlo[500+i] <- kw_99
+  
+  # ES - średnia ze scenariuszy powyżej VaR
+  fragmentDanych2 <- fragmentDanych %>% filter(logCh > kw_99)
+  warunkowa_99 = mean(fragmentDanych2$logCh)
+  dane_strata$es_99_monte_carlo[500+i] <- warunkowa_99
+}
+
+dane_strata$Data<-as.Date(dane_strata$Data)
+
+plot1<-ggplot(dane_strata, aes(x=Data))+
+  geom_line(aes(y=es_99_monte_carlo, colour="ES_MC 99%"))+
+  geom_line(aes(y=var_99_monte_carlo, colour="VaR_MC 99%"))
+
+plot1
+```
+
+Na powyższym rysunku zaprezentowano VaR i ES obliczone metodą symulacji Monte-Carlo. Widać na nim charakterystyczne wahania, wynikające bezpośrednio z używania różnych, losowanych z rozkładu normalnego danych dla kazdej daty. Gdyby pominąć owe wahania i traktować je jako pewnego rodzaju przedziały ufności dla VaR i ES, wynik jest bardzo zbliżony do wyniku uzyskanego metodą historyczną.
+
+
+# Metoda EWMA
+
+```{r, echo=FALSE,warning=FALSE}
+iloscDni = 500
+dane_strata$var_99_EWMA <- NA
+dane_strata$es_99_EWMA <- NA
+
+for (i in seq(1,nrow(dane_strata)-500,1)){
+  fragmentDanych <- dane_strata[i:(499+i),]
+  fragmentDanych$vol<-EWMAvol(fragmentDanych$logCh, lambda=0.999)$Sigma.t
+  fragmentDanych<-fragmentDanych %>% mutate(Z = logCh * lead(vol)/vol)
+  kw_99<-quantile(fragmentDanych$Z, .99, na.rm = T)
+  dane_strata$var_99_EWMA[500+i] <- kw_99
+  
+  # ES - średnia ze scenariuszy powyżej VaR
+  fragmentDanych2 <- fragmentDanych %>% filter(Z > kw_99)
+  warunkowa_99 = mean(fragmentDanych2$Z)
+  dane_strata$es_99_EWMA[500+i] <- warunkowa_99
+}
+
+dane_strata$Data<-as.Date(dane_strata$Data)
+
+plot1<-ggplot(dane_strata, aes(x=Data))+
+  geom_line(aes(y=es_99_EWMA, colour="ES_EWMA 99%"))+
+  geom_line(aes(y=var_99_EWMA, colour="VaR_EWMA 99%"))
+
+plot1
+```
+
+Na ostatnim z wykresów widać VaR i ES obliczone metodą uwzględniającą heteroskedastyczność. Do policzenia wartości VaR i ES została użyta zmienność obliczona przy pomocy modelu EWMA z parametrem labda równym 0.99.
+
+Ze względu na wysoki współczynnik lambda, zmienność uzględnia starsze obserwacje, i można zaobserwować podobną sytuację jak w przypadku metody historycznej. Skok w styczniu 2020 nie wykracza poza 10%, jednak podniesiona wartość VaR utrzymuje się długo.
+
+

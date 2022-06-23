@@ -1,0 +1,281 @@
+---
+title: "Sprawozdanie z zajęć 2 - ilościowe miary ryzyka rynkowego"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r, message=FALSE, echo=FALSE}
+library(dplyr)
+library(ggplot2)
+```
+```{r, echo=FALSE}
+dane<-read.csv("CenyCDR20202021.csv", dec = ",")
+names(dane)<-c("Data","Zamkniecie","Otwarcie", "Max","Min","Wol", "Zmiana")
+dane$Data<-as.Date(dane$Data,"%d.%m.%Y") ##Zmiana formatu
+dane<-dane %>%  
+  arrange(Data) %>% ##Sort
+      mutate(logarytm = log(Zamkniecie/lag(Zamkniecie))*100) #logarytmiczna
+```
+
+# Zadanie 1
+
+Poniżej przedstawiono stopy zwrotu wyznaczone dla danych dziennych wartości akcji CD Projekt Red, w okresie od 1 stycznia 2020 do 31 października 2021.
+
+
+```{r, echo=FALSE, warning=FALSE}
+dane$m10<-NA
+for(i in 11:length(dane$Data)){
+  srednia<-mean(na.omit(dane$logarytm[c((i-10):(i-1))]))
+  wartosci<-na.omit(dane$logarytm[c((i-10):(i-1))])
+  roznice<- (wartosci-rep(srednia,length(wartosci)))^2
+  suma<-1/9*sum(roznice)
+  dane$m10[i]<-suma
+}
+srednie<-c()
+dane$m25<-NA
+for(i in 26:length(dane$Data)){
+  srednia<-mean(na.omit(dane$logarytm[c((i-25):(i-1))]))
+  srednie[i]<-srednia
+  wartosci<-na.omit(dane$logarytm[c((i-25):(i-1))])
+  roznice<- (wartosci-rep(srednia,length(wartosci)))^2
+  suma<-1/24*sum(roznice)
+  dane$m25[i]<-suma
+}
+dane$m50<-NA
+for(i in 51:length(dane$Data)){
+  srednia<-mean(na.omit(dane$logarytm[c((i-50):(i-1))]))
+  wartosci<-na.omit(dane$logarytm[c((i-50):(i-1))])
+  roznice<- (wartosci-rep(srednia,length(wartosci)))^2
+  suma<-1/49*sum(roznice)
+  dane$m50[i]<-suma
+}
+dane$m100<-NA
+for(i in 101:length(dane$Data)){
+  srednia<-mean(na.omit(dane$logarytm[c((i-100):(i-1))]))
+  wartosci<-na.omit(dane$logarytm[c((i-100):(i-1))])
+  roznice<- (wartosci-rep(srednia,length(wartosci)))^2
+  suma<-1/99*sum(roznice)
+  dane$m100[i]<-suma
+}
+```
+
+```{r, echo=FALSE, warning=FALSE}
+ploted<-dane[c(1,8:12)]
+
+ggplot(ploted,aes(Data))+
+  geom_line(aes(y=m10, colour="m=10"))+
+  geom_line(aes(y=m25, colour="m=25"))+
+  geom_line(aes(y=m50, colour="m=50"))+
+  geom_line(aes(y=m100, colour="m=100"))
+```
+
+W zależności od doboru m, wykres zmienności zmienia się. Im mniejsze wartości m są wybierane, tym zmienność jest mniej stabilna i mniej odporna na wahania krótkoterminowe. Można zauważyć, że wraz ze wzrostem wartości m, skoki zmienności są coraz mniejsze i coraz bardziej stabilne.
+
+# Zadanie 2
+```{r, message=FALSE, echo=FALSE}
+library(ggplot2)
+```
+```{r, echo=FALSE, warning=FALSE}
+dane1<-dane[c(1,8,10)]
+dane1$m25_2<-NA
+for(i in 26:length(dane1$Data)){
+  wartosci<-na.omit(dane1$logarytm[c((i-25):(i-1))])^2
+  suma<-1/24*sum(wartosci)
+  dane1$m25_2[i]<-suma
+}
+ggplot(dane1,aes(Data))+
+  geom_line(aes(y=m25, colour="m=25_1"))+
+  geom_line(aes(y=m25_2, colour="m=25_2"))
+dane1$roznica<-abs(dane1$m25-dane1$m25_2)
+
+ggplot(dane1, aes(Data)) + 
+  geom_line(aes(y=logarytm, colour="stopa zwrotu"))+
+  geom_line(aes(y=roznica, colour="roznica"))
+```
+
+Na podstawie powyższych wykresów mozna postawić tezę, że największe różnice pomiędzy zmiennością stóp zwrotu liczoną na dwa sposoby pojawiają się wtedy, kiedy średnia stopa zwrotu z danego okresu odbiega od zera. Tzn kiey na przykład kilka razy pod rząd wystąpi przewaga wartości dodatnich nad wartościami ujemnymi bądź odwrotnie.
+
+Aby potwierdzić hipotezę, poniżej wykres średnich stóp zwrotu dla m=25:
+
+```{r, warning=FALSE, echo=FALSE}
+srednie<-as.data.frame(srednie)
+dane1$srednia<-srednie$srednie
+ggplot(dane1, aes(Data)) + 
+  geom_line(aes(y=srednia, colour="srednie"))+
+  geom_line(aes(y=roznica, colour="roznica"))
+```
+
+
+Powyższy wykres potwierdza postawioną wcześniej hipotezę.
+
+# Zadanie 3
+```{r, message=FALSE, echo=FALSE}
+library(qcc)
+library(RTL)
+library(tseries)
+library(MTS)
+library(ggplot2)
+```
+
+```{r, echo=FALSE, warning=FALSE}
+ExWma<-EWMAvol(na.omit(dane$logarytm), lambda=0.94)
+
+p<-as.data.frame(dane$Data)
+names(p)<-"Data"
+p$vol[2:487]<-ExWma$Sigma.t
+p$m25<-dane$m25
+
+ggplot(p,aes(Data))+
+  geom_line(aes(y=vol, colour = "EWMA(lambda 0.94)"))+
+  geom_line(aes(y=m25, colour = "m=25"))
+
+```
+
+Model EWMA z lambda = 0.94 nie odbiega znacząco od zmienności liczonej przy uzyciu poprzedniego wzoru z m=25
+
+```{r, echo=T, warning=FALSE, results='hide'}
+dane2<-ts(na.omit(dane[c(8)])) ## c(8) to stopy zwrotu
+Garch<-tseries::garch(dane2)
+```
+```{r, echo=T, warning=FALSE}
+dane$m10<-NA
+for(i in 11:length(dane$Data)){
+  srednia<-mean(na.omit(dane$logarytm[c((i-10):(i-1))]))
+  wartosci<-na.omit(dane$logarytm[c((i-10):(i-1))])
+  roznice<- (wartosci-rep(srednia,length(wartosci)))^2
+  suma<-1/9*sum(roznice)
+  dane$m10[i]<-suma
+}
+g<-as.data.frame(Garch$fitted.values^2)
+g$Data<-dane$Data[2:487]
+g$m10<-dane$m10[2:487]
+ggplot(g, aes(x=Data)) + geom_line(aes(y=sigt, colour="GARCH(1,1)"))+
+  geom_line(aes(y=m10, colour="m=10"))
+```
+
+W przypadku modelu GARCH(1,1) wahania wydają się pokrywać z wcześniejszym modelem z m=10. 
+
+Tu nie wiem czy jest to dobrze więc udostępniam kod, bo GARCH nie chce zejść poniżej 10.
+
+# Zadanie 4
+```{r, message=FALSE, echo=FALSE}
+library(dplyr)
+```
+```{r, echo=FALSE}
+
+mbank<-read.csv("MBANK.csv", dec = ",")
+names(mbank)<-c("Data","Zamkniecie","Otwarcie", "Max","Min","Wol", "Zmiana")
+mbank$Data<-as.Date(mbank$Data,"%d.%m.%Y") ##Zmiana formatu
+mbank<-mbank %>%  
+  arrange(Data) %>% ##Sort
+      mutate(logarytm = log(Zamkniecie/lag(Zamkniecie))*100) #logarytmiczna
+
+ccc<-read.csv("CCC.csv", dec = ",")
+names(ccc)<-c("Data","Zamkniecie","Otwarcie", "Max","Min","Wol", "Zmiana")
+ccc$Data<-as.Date(ccc$Data,"%d.%m.%Y") ##Zmiana formatu
+ccc<-ccc %>%  
+  arrange(Data) %>% ##Sort
+      mutate(logarytm = log(Zamkniecie/lag(Zamkniecie))*100) #logarytmiczna
+
+amrest<-read.csv("AMREST.csv", dec = ",")
+names(amrest)<-c("Data","Zamkniecie","Otwarcie", "Max","Min","Wol", "Zmiana")
+amrest$Data<-as.Date(amrest$Data,"%d.%m.%Y") ##Zmiana formatu
+amrest<-amrest %>%  
+  arrange(Data) %>% ##Sort
+      mutate(logarytm = log(Zamkniecie/lag(Zamkniecie))*100) #logarytmiczna
+
+korelacje<-as.data.frame(na.omit(cbind(amrest$logarytm, ccc$logarytm, mbank$logarytm)))
+names(korelacje)<-c("AMREST", "CCC", "MBANK")
+cor(korelacje)
+```
+Korelacja pomiędzy spółkami z WIG30 jest nieznacząca. 
+
+# Zadanie 5
+
+```{r, echo=FALSE}
+acf(as.ts(na.omit(amrest$logarytm)))
+acf(as.ts(na.omit(mbank$logarytm)))
+acf(as.ts(na.omit(ccc$logarytm)))
+```
+
+Dzienne stopy zwrotu poszczególnych spółek (MBANK, CCC, AMREST) nie wykazują autokorelacji pierwszego i większych rzędów. 
+
+W przypadku CCC (ostatni wykres) występuje autokorelacja pierwszego rzędu, jednak jest ona bardzo znikoma i bez dalszej analizy należy potraktować ją jako błąd II rodzaju. 
+
+Autokorelacje między stopami zwrotu zmniejszają ryzyko inwestycji, gdyż przy występującej autokorelacji, na podstawie wyników z poprzedniego dnia z przybliżeniem dałoby sie przewidziec wyniki na dzień następny.
+
+# Zadanie 6
+```{r, message=FALSE, echo=FALSE}
+library(qcc)
+library(MTS)
+```
+```{r, echo=FALSE, warning=FALSE}
+ExWma1<-EWMAvol(na.omit(mbank$logarytm), lambda=0.8)
+ExWma2<-EWMAvol(na.omit(mbank$logarytm), lambda=0.85)
+ExWma3<-EWMAvol(na.omit(mbank$logarytm), lambda=0.9)
+ExWma4<-EWMAvol(na.omit(mbank$logarytm), lambda=0.95)
+ExWma5<-EWMAvol(na.omit(mbank$logarytm), lambda=0.99)
+wyniki<-as.data.frame(cbind(ExWma1$Sigma.t,ExWma2$Sigma.t,ExWma3$Sigma.t,ExWma4$Sigma.t,ExWma5$Sigma.t))
+wyniki$Data<-mbank$Data[2:210]
+names(wyniki)<-c("ExWma1","ExWma2","ExWma3","ExWma4","ExWma5","Data")
+
+ggplot(wyniki, aes(Data))+
+  geom_line(aes(y=ExWma1, colour="0.8"))+
+  geom_line(aes(y=ExWma2, colour="0.85"))+
+  geom_line(aes(y=ExWma3, colour="0.9"))+
+  geom_line(aes(y=ExWma4, colour="0.95"))+
+  geom_line(aes(y=ExWma5, colour="0.99"))+
+  labs(color = 'Lambda')+
+  ylab("Zmiennosc")
+```
+Podobnie jak w przypadku zwiększania wartości m w pierwszym zadaniu, zwiększanie wartości lambda powoduje że model dłużej "pamięta" stare wartości. Zatem im większa lambda, tym zmienność jest bardziej stabilna i odporna na wahania stóp zwrotu.
+
+# Zadanie 7
+
+Aby wyznaczyć lambda, najlepiej oddające zmienność kroczącą, proponowanym rozwiązaniem jest stworzenie wielu modeli EWMA, a następnie porównanie wartości zmienności uzyskanych, ze zmiennościami uzyskanymi metodą kroczącą dla m=25.
+
+```{r, message=FALSE, echo=FALSE}
+library(ggplot2)
+library(MTS)
+library(modelr)
+```
+```{r, echo=FALSE, warning=FALSE}
+mbank$m25<-NA
+for(i in 26:length(mbank$Data)){
+  srednia<-mean(na.omit(mbank$logarytm[c((i-25):(i-1))]))
+  wartosci<-na.omit(mbank$logarytm[c((i-25):(i-1))])
+  roznice<- (wartosci-rep(srednia,length(wartosci)))^2
+  suma<-1/24*sum(roznice)
+  mbank$m25[i]<-suma
+}
+roznice<-as.data.frame(seq(0.001,0.999,0.001))
+roznice$roznice<-NA
+names(roznice)<-c("Val","Roznice")
+i=1
+for (a in seq(0.001,0.999,0.001)) {
+  ExWma<-EWMAvol(na.omit(mbank$logarytm), lambda=a)
+  mbank$ewma[2:210]<-ExWma$Sigma.t
+  roznice$Roznice[i]<-mean((mbank$m25[26:nrow(mbank)]-mbank$ewma[26:nrow(mbank)])^2)
+  i<-i+1
+}
+
+
+min_point<-roznice %>% arrange(Roznice) %>% slice(1)
+ggplot(roznice, aes(x=Val, y=Roznice)) + geom_line()+
+    annotate("text", x = min_point$Val, y = min_point$Roznice, colour = "blue", label="0.952; 1.426699")+
+  annotate("point", x = min_point$Val, y = min_point$Roznice, colour = "red", label="minimum")+ylab("MSE")
+```
+
+Jak widać na powyższym wykresie, najmniejsza wartość błędu średniokwadratowego jest dla lambdy równej 0.952. Poniżej mozna zobaczyć porównanie obu zmienności na wykresie.
+
+```{r, echo=FALSE, warning=FALSE}
+ExWma<-EWMAvol(na.omit(mbank$logarytm), lambda=0.952)
+  mbank$ewma[2:210]<-ExWma$Sigma.t
+ggplot(mbank,aes(Data))+
+  geom_line(aes(y=m25, colour="m=25"))+
+  geom_line(aes(y=ewma, colour="ewma"))+ylab("Zmiennosc")
+
+
+```
